@@ -27,18 +27,22 @@ void ControllerMgr_Init(void)
 
 /**
  * @brief 更新系统输入数据
- * @details 使用安全拷贝接口，避免中断更新与主循环读取产生数据撕裂
+ * @details 连续状态用 CopyData，一次性命令用原子 Consume
  */
 void ControllerMgr_UpdateInputs(void)
 {
     PiRxData_t pi;
     JY61P_Data_t imu;
     ScreenRxData_t *screen = ProtocolScreen_GetData();
-    uint8_t need_clear_task_ctrl = 0U;
-    uint8_t need_clear_route = 0U;
-    uint8_t need_clear_target = 0U;
 
-    /* 安全读取 PI / IMU 共享数据 */
+    uint8_t task_id = TASK_ID_NONE;
+    uint8_t start_cmd = 0U;
+    uint8_t stop_cmd = 0U;
+    uint8_t route_a = 0U, route_b = 0U, route_c = 0U, route_d = 0U;
+    float target_x_dummy = 0.0f;
+    float target_y_dummy = 0.0f;
+
+    /* 连续状态：安全快照 */
     ProtocolPi_CopyData(&pi);
     JY61P_CopyData(&imu);
 
@@ -53,25 +57,38 @@ void ControllerMgr_UpdateInputs(void)
     /* 更新IMU数据 */
     g_sys.imu = imu;
 
-    /* 处理树莓派发送的路线数据 */
-    if (pi.route_a >= 1U && pi.route_a <= 9U)
+    /* 一次性命令：原子取出并清空，避免比赛时出现丢命令/重复命令 */
+    if (ProtocolPi_ConsumeRoute(&route_a, &route_b, &route_c, &route_d))
     {
-        TaskMgr_SetUserRoute(pi.route_a, pi.route_b, pi.route_c, pi.route_d);
-        need_clear_route = 1U;
+        TaskMgr_SetUserRoute(route_a, route_b, route_c, route_d);
     }
+
+    if (ProtocolPi_ConsumeTaskCtrl(&task_id, &start_cmd, &stop_cmd))
+    {
+        if (task_id != TASK_ID_NONE)
+        {
+            TaskMgr_LoadTask(task_id);
+        }
+
+        if (start_cmd)
+        {
+            TaskMgr_Start();
+        }
+
+        if (stop_cmd)
+        {
+            TaskMgr_Stop();
+        }
+    }
+
+    /* direct target 目前还没接入任务层，先消费掉，避免一直悬挂 */
+    (void)ProtocolPi_ConsumeTarget(&target_x_dummy, &target_y_dummy);
 
     /* 处理屏幕发送的路线数据 */
     if (screen->route_valid)
     {
         TaskMgr_SetUserRoute(screen->route_a, screen->route_b, screen->route_c, screen->route_d);
         screen->route_valid = 0U;
-    }
-
-    /* 处理树莓派发送的任务ID */
-    if (pi.task_id != TASK_ID_NONE)
-    {
-        TaskMgr_LoadTask(pi.task_id);
-        need_clear_task_ctrl = 1U;
     }
 
     /* 处理屏幕发送的任务ID */
@@ -81,26 +98,17 @@ void ControllerMgr_UpdateInputs(void)
         screen->task_id = TASK_ID_NONE;
     }
 
-    /* 处理启动命令 */
-    if (pi.start_cmd || screen->start_cmd)
+    /* 处理屏幕启动/停止命令 */
+    if (screen->start_cmd)
     {
         TaskMgr_Start();
-        need_clear_task_ctrl = 1U;
         screen->start_cmd = 0U;
     }
 
-    /* 处理停止命令 */
-    if (pi.stop_cmd || screen->stop_cmd)
+    if (screen->stop_cmd)
     {
         TaskMgr_Stop();
-        need_clear_task_ctrl = 1U;
         screen->stop_cmd = 0U;
-    }
-
-    /* 目前 direct target 还没有接入任务层，先做一次性消费，防止后续误触发 */
-    if (pi.target_valid)
-    {
-        need_clear_target = 1U;
     }
 
     /* 处理IMU校零命令 */
@@ -108,22 +116,6 @@ void ControllerMgr_UpdateInputs(void)
     {
         JY61P_SetZero();
         screen->imu_zero_cmd = 0U;
-    }
-
-    /* 清除已经消费过的一次性 PI 命令 */
-    if (need_clear_route)
-    {
-        ProtocolPi_ClearRoute();
-    }
-
-    if (need_clear_task_ctrl)
-    {
-        ProtocolPi_ClearTaskCtrl();
-    }
-
-    if (need_clear_target)
-    {
-        ProtocolPi_ClearTarget();
     }
 }
 
