@@ -12,6 +12,25 @@ static uint8_t uart1_rx_byte = 0;
 static uint8_t uart3_rx_byte = 0;
 static uint8_t uart6_rx_byte = 0;
 
+/**
+ * @brief 重新启动单字节中断接收
+ */
+static void UART_RestartRxIT(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance == USART1)
+    {
+        HAL_UART_Receive_IT(&huart1, &uart1_rx_byte, 1);
+    }
+    else if (huart->Instance == USART3)
+    {
+        HAL_UART_Receive_IT(&huart3, &uart3_rx_byte, 1);
+    }
+    else if (huart->Instance == USART6)
+    {
+        HAL_UART_Receive_IT(&huart6, &uart6_rx_byte, 1);
+    }
+}
+
 void MX_USART1_UART_Init(void)
 {
     __HAL_RCC_USART1_CLK_ENABLE();
@@ -138,4 +157,28 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         ProtocolScreen_RxByte(uart6_rx_byte);
         HAL_UART_Receive_IT(&huart6, &uart6_rx_byte, 1);
     }
+}
+
+/**
+ * @brief UART错误回调
+ * @note 处理 ORE/FE/NE/PE 等错误，防止串口接收永久卡死
+ */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == NULL)
+    {
+        return;
+    }
+
+    /* 清错误标志 */
+    __HAL_UART_CLEAR_PEFLAG(huart);
+    __HAL_UART_CLEAR_FEFLAG(huart);
+    __HAL_UART_CLEAR_NEFLAG(huart);
+    __HAL_UART_CLEAR_OREFLAG(huart);
+
+    /* 复位错误状态并重启接收 */
+    huart->ErrorCode = HAL_UART_ERROR_NONE;
+    huart->RxState = HAL_UART_STATE_READY;
+
+    UART_RestartRxIT(huart);
 }

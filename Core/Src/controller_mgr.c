@@ -34,8 +34,11 @@ void ControllerMgr_UpdateInputs(void)
     PiRxData_t pi;
     JY61P_Data_t imu;
     ScreenRxData_t *screen = ProtocolScreen_GetData();
+    uint8_t need_clear_task_ctrl = 0U;
+    uint8_t need_clear_route = 0U;
+    uint8_t need_clear_target = 0U;
 
-    /* 关键修复：不要直接裸读全局共享结构体 */
+    /* 安全读取 PI / IMU 共享数据 */
     ProtocolPi_CopyData(&pi);
     JY61P_CopyData(&imu);
 
@@ -45,7 +48,7 @@ void ControllerMgr_UpdateInputs(void)
     g_sys.ball.vx_mmps = pi.ball_vx_mmps;
     g_sys.ball.vy_mmps = pi.ball_vy_mmps;
     g_sys.ball.valid = pi.ball_valid;
-    g_sys.ball.tick_ms = pi.ball_update_ms;   /* 关键修复：只看球状态帧时间戳 */
+    g_sys.ball.tick_ms = pi.ball_update_ms;   /* 只看球状态帧时间戳 */
 
     /* 更新IMU数据 */
     g_sys.imu = imu;
@@ -54,7 +57,7 @@ void ControllerMgr_UpdateInputs(void)
     if (pi.route_a >= 1U && pi.route_a <= 9U)
     {
         TaskMgr_SetUserRoute(pi.route_a, pi.route_b, pi.route_c, pi.route_d);
-        /* 这里只清局部副本，避免主循环直接改共享结构 */
+        need_clear_route = 1U;
     }
 
     /* 处理屏幕发送的路线数据 */
@@ -68,6 +71,7 @@ void ControllerMgr_UpdateInputs(void)
     if (pi.task_id != TASK_ID_NONE)
     {
         TaskMgr_LoadTask(pi.task_id);
+        need_clear_task_ctrl = 1U;
     }
 
     /* 处理屏幕发送的任务ID */
@@ -81,6 +85,7 @@ void ControllerMgr_UpdateInputs(void)
     if (pi.start_cmd || screen->start_cmd)
     {
         TaskMgr_Start();
+        need_clear_task_ctrl = 1U;
         screen->start_cmd = 0U;
     }
 
@@ -88,7 +93,14 @@ void ControllerMgr_UpdateInputs(void)
     if (pi.stop_cmd || screen->stop_cmd)
     {
         TaskMgr_Stop();
+        need_clear_task_ctrl = 1U;
         screen->stop_cmd = 0U;
+    }
+
+    /* 目前 direct target 还没有接入任务层，先做一次性消费，防止后续误触发 */
+    if (pi.target_valid)
+    {
+        need_clear_target = 1U;
     }
 
     /* 处理IMU校零命令 */
@@ -96,6 +108,22 @@ void ControllerMgr_UpdateInputs(void)
     {
         JY61P_SetZero();
         screen->imu_zero_cmd = 0U;
+    }
+
+    /* 清除已经消费过的一次性 PI 命令 */
+    if (need_clear_route)
+    {
+        ProtocolPi_ClearRoute();
+    }
+
+    if (need_clear_task_ctrl)
+    {
+        ProtocolPi_ClearTaskCtrl();
+    }
+
+    if (need_clear_target)
+    {
+        ProtocolPi_ClearTarget();
     }
 }
 
@@ -153,7 +181,7 @@ void ControllerMgr_Run5ms(void)
         return;
     }
 
-    /* 关键修复：超时只依据 ball_update_ms，而不是“任意 PI 帧更新时间” */
+    /* 只依据 ball_update_ms 判断球数据是否过期 */
     if (SafetyMgr_CheckPiTimeout(g_sys_ms, g_sys.ball.tick_ms) && g_sys.ball.valid)
     {
         g_sys.ball.valid = 0U;

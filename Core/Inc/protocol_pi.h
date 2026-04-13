@@ -32,10 +32,10 @@ typedef struct
     uint32_t cmd_update_ms;    /* task/route/target 等命令帧更新 */
     uint32_t laser_update_ms;  /* 激光追踪帧更新 */
 
-    /* ======== 激光数据 ======== */
+    /* 激光数据 */
     float laser_x_mm;
     float laser_y_mm;
-    uint8_t laser_valid; /* 1: 视野内有激光, 0: 无激光 */
+    uint8_t laser_valid;
 
 } PiRxData_t;
 
@@ -43,5 +43,10 @@ void ProtocolPi_Init(void);
 void ProtocolPi_RxByte(uint8_t byte);
 void ProtocolPi_CopyData(PiRxData_t *dest);
 PiRxData_t* ProtocolPi_GetData(void);
+
+/* 一次性命令消费接口，防止主循环反复执行同一命令 */
+void ProtocolPi_ClearTaskCtrl(void);
+void ProtocolPi_ClearRoute(void);
+void ProtocolPi_ClearTarget(void);
 
 #endif

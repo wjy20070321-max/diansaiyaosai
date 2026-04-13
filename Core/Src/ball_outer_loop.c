@@ -8,14 +8,12 @@
 #include "ball_outer_loop.h"
 #include "app_config.h"
 
-/* ==========================================================
- * LQR 最优控制参数区
- * ========================================================== */
+/* LQR 参数 */
 static const float LQR_K_X[2] = { 0.0015f, 0.0025f };
 static const float LQR_K_Y[2] = { 0.0015f, 0.0025f };
 
 /* 前馈增益常数 */
-#define FF_GAIN   (0.0001427f)
+#define FF_GAIN            (0.0001427f)
 
 /* 目标导数估计滤波参数 */
 #define TARGET_VEL_ALPHA   (0.25f)
@@ -26,6 +24,8 @@ static float last_target_x = 0.0f;
 static float last_target_y = 0.0f;
 static float last_target_vx = 0.0f;
 static float last_target_vy = 0.0f;
+static float last_target_ax = 0.0f;
+static float last_target_ay = 0.0f;
 static uint8_t target_hist_valid = 0U;
 
 /**
@@ -77,11 +77,13 @@ static float LQR_Axis_Calc(float ref_p, float ref_v, float ref_a,
 {
     float err_pos = act_p - ref_p;
     float err_vel = act_v - ref_v;
+    float u_fb_rad;
+    float u_ff_rad;
+    float total_deg;
 
-    float u_fb_rad = -(K[0] * err_pos + K[1] * err_vel);
-    float u_ff_rad = ref_a * FF_GAIN;
-
-    float total_deg = (u_fb_rad + u_ff_rad) * 57.2957795f;
+    u_fb_rad = -(K[0] * err_pos + K[1] * err_vel);
+    u_ff_rad = ref_a * FF_GAIN;
+    total_deg = (u_fb_rad + u_ff_rad) * 57.2957795f;
 
     return LQR_Limitf(total_deg, -tilt_limit_deg, tilt_limit_deg);
 }
@@ -103,6 +105,8 @@ void BallOuterLoop_Reset(void)
     last_target_y = 0.0f;
     last_target_vx = 0.0f;
     last_target_vy = 0.0f;
+    last_target_ax = 0.0f;
+    last_target_ay = 0.0f;
     target_hist_valid = 0U;
 }
 
@@ -115,24 +119,31 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
                        uint8_t mode,
                        BallOuterOutput_t *out)
 {
-    float target_vx_raw, target_vy_raw;
-    float target_ax_raw, target_ay_raw;
-    float target_vx, target_vy;
-    float target_ax, target_ay;
-    float x_tilt_limit, y_tilt_limit;
+    float target_vx_raw;
+    float target_vy_raw;
+    float target_ax_raw;
+    float target_ay_raw;
+    float target_vx;
+    float target_vy;
+    float target_ax;
+    float target_ay;
+    float x_tilt_limit;
+    float y_tilt_limit;
 
     if (out == NULL)
     {
         return;
     }
 
-    /* 第一次进入时，先把历史值对齐，避免导数尖峰 */
+    /* 第一次进入时对齐历史值，避免导数尖峰 */
     if (!target_hist_valid)
     {
         last_target_x = x_ref;
         last_target_y = y_ref;
         last_target_vx = 0.0f;
         last_target_vy = 0.0f;
+        last_target_ax = 0.0f;
+        last_target_ay = 0.0f;
         target_hist_valid = 1U;
     }
 
@@ -146,9 +157,9 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
     target_ax_raw = (target_vx - last_target_vx) / CONTROL_OUTER_DT_S;
     target_ay_raw = (target_vy - last_target_vy) / CONTROL_OUTER_DT_S;
 
-    /* 加速度也做低通，避免激光点抖动时前馈炸掉 */
-    target_ax = LPF1(0.0f, target_ax_raw, TARGET_ACC_ALPHA);
-    target_ay = LPF1(0.0f, target_ay_raw, TARGET_ACC_ALPHA);
+    /* 这里改成真正“有记忆”的加速度低通 */
+    target_ax = LPF1(last_target_ax, target_ax_raw, TARGET_ACC_ALPHA);
+    target_ay = LPF1(last_target_ay, target_ay_raw, TARGET_ACC_ALPHA);
 
     /* BRAKE 模式：目标速度/加速度置零，利用当前测得球速做阻尼刹车 */
     if (mode == CTRL_MODE_BRAKE)
@@ -163,7 +174,7 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
     y_tilt_limit = GetTiltLimitDeg(mode, x_meas - x_ref);
     x_tilt_limit = GetTiltLimitDeg(mode, y_meas - y_ref);
 
-    /* 兼容交叉控制映射：
+    /* 交叉控制映射：
        倾斜Y轴 -> 控制球X方向
        倾斜X轴 -> 控制球Y方向 */
     if (mode == CTRL_MODE_FAST || mode == CTRL_MODE_HOLD || mode == CTRL_MODE_BRAKE)
@@ -187,4 +198,6 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
     last_target_y = y_ref;
     last_target_vx = target_vx;
     last_target_vy = target_vy;
+    last_target_ax = target_ax;
+    last_target_ay = target_ay;
 }

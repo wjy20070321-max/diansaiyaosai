@@ -15,7 +15,6 @@ extern volatile uint32_t g_sys_ms;
 
 /**
  * @brief 安全获取树莓派数据（防止数据撕裂）
- * @param dest 目标结构体指针
  */
 void ProtocolPi_CopyData(PiRxData_t *dest)
 {
@@ -26,6 +25,43 @@ void ProtocolPi_CopyData(PiRxData_t *dest)
 
     __disable_irq();
     *dest = g_pi;
+    __enable_irq();
+}
+
+/**
+ * @brief 清除任务控制命令（一次性消费）
+ */
+void ProtocolPi_ClearTaskCtrl(void)
+{
+    __disable_irq();
+    g_pi.task_id = TASK_ID_NONE;
+    g_pi.start_cmd = 0U;
+    g_pi.stop_cmd = 0U;
+    __enable_irq();
+}
+
+/**
+ * @brief 清除路径设置命令（一次性消费）
+ */
+void ProtocolPi_ClearRoute(void)
+{
+    __disable_irq();
+    g_pi.route_a = 0U;
+    g_pi.route_b = 0U;
+    g_pi.route_c = 0U;
+    g_pi.route_d = 0U;
+    __enable_irq();
+}
+
+/**
+ * @brief 清除目标设置命令（一次性消费）
+ */
+void ProtocolPi_ClearTarget(void)
+{
+    __disable_irq();
+    g_pi.target_x_mm = 0.0f;
+    g_pi.target_y_mm = 0.0f;
+    g_pi.target_valid = 0U;
     __enable_irq();
 }
 
@@ -120,7 +156,7 @@ void ProtocolPi_RxByte(uint8_t byte)
         sum = (uint8_t)(cmd ^ len ^ XorSum(buf, len));
         if (sum == byte)
         {
-            /* 兼容旧代码：任意有效帧都刷新总更新时间 */
+            /* 任意有效帧都刷新总更新时间（兼容旧逻辑） */
             g_pi.update_ms = g_sys_ms;
 
             /* 球状态帧 */
