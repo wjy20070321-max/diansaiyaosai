@@ -1,38 +1,44 @@
-#include "servo.h"  // 舵机控制主头文件
-#include "tim.h"    // 定时器相关头文件
+#include "servo.h"
+#include "tim.h"
 
 /**
  * @brief 将微秒(us)转换为定时器计数器值(CCR)
- * @param us 微秒值
- * @return 定时器计数器值
- * 
- * @note 限制范围在500-2500us之间，对应舵机标准PWM范围
  */
 static uint32_t Servo_UsToCcr(float us)
 {
-    if (us < 500.0f) us = 500.0f;
-    if (us > 2500.0f) us = 2500.0f;
+    if (us < SERVO_PWM_MIN_US) us = SERVO_PWM_MIN_US;
+    if (us > SERVO_PWM_MAX_US) us = SERVO_PWM_MAX_US;
     return (uint32_t)(us + 0.5f);
 }
 
 /**
- * @brief 将角度(deg)转换为微秒(us)
- * @param deg 角度值
- * @return 微秒值
- * 
- * @note 角度范围限制在-SERVO_MAX_CMD_DEG到SERVO_MAX_CMD_DEG之间
- * @note 使用线性映射将角度转换为PWM脉宽
+ * @brief 将绝对舵机角度转换为脉宽
+ * @param abs_deg 绝对舵机角度，范围 0 ~ SERVO_PHYS_TOTAL_DEG
  */
-static float Servo_DegToUs(float deg)
+static float Servo_AbsDegToUs(float abs_deg)
 {
-    deg = Limitf(deg, -SERVO_MAX_CMD_DEG, SERVO_MAX_CMD_DEG);
-    return SERVO_PWM_MID_US + (deg / SERVO_MAX_CMD_DEG) * (SERVO_PWM_MAX_US - SERVO_PWM_MID_US);
+    abs_deg = Limitf(abs_deg, 0.0f, SERVO_PHYS_TOTAL_DEG);
+
+    return SERVO_PWM_MIN_US +
+           (abs_deg / SERVO_PHYS_TOTAL_DEG) * (SERVO_PWM_MAX_US - SERVO_PWM_MIN_US);
+}
+
+/**
+ * @brief 将“相对平台中心角”转换成“绝对舵机角”
+ * @param rel_deg 相对平台水平中心的角度（可正可负）
+ * @param center_offset_deg 安装补偿角
+ * @param max_cmd_deg 当前轴允许的最大相对控制角
+ */
+static float Servo_RelDegToAbsDeg(float rel_deg, float center_offset_deg, float max_cmd_deg)
+{
+    rel_deg = Limitf(rel_deg, -max_cmd_deg, max_cmd_deg);
+
+    /* 中心点 = 物理中位 + 安装补偿 */
+    return SERVO_PHYS_CENTER_DEG + center_offset_deg + rel_deg;
 }
 
 /**
  * @brief 舵机初始化
- * @note 启动TIM2定时器的PWM输出通道1和2
- * @note 将舵机归中
  */
 void Servo_Init(void)
 {
@@ -43,36 +49,48 @@ void Servo_Init(void)
 
 /**
  * @brief 设置X轴舵机角度
- * @param deg X轴角度
- * 
- * @note 如果定义了SERVO_X_REVERSE，则角度取反
+ * @param deg 相对平台水平中心的目标角度
  */
 void Servo_SetXDeg(float deg)
 {
 #if SERVO_X_REVERSE
     deg = -deg;
 #endif
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, Servo_UsToCcr(Servo_DegToUs(deg)));
+
+    __HAL_TIM_SET_COMPARE(
+        &htim2,
+        TIM_CHANNEL_1,
+        Servo_UsToCcr(
+            Servo_AbsDegToUs(
+                Servo_RelDegToAbsDeg(deg, SERVO_X_CENTER_OFFSET_DEG, SERVO_X_MAX_CMD_DEG)
+            )
+        )
+    );
 }
 
 /**
  * @brief 设置Y轴舵机角度
- * @param deg Y轴角度
- * 
- * @note 如果定义了SERVO_Y_REVERSE，则角度取反
+ * @param deg 相对平台水平中心的目标角度
  */
 void Servo_SetYDeg(float deg)
 {
 #if SERVO_Y_REVERSE
     deg = -deg;
 #endif
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, Servo_UsToCcr(Servo_DegToUs(deg)));
+
+    __HAL_TIM_SET_COMPARE(
+        &htim2,
+        TIM_CHANNEL_2,
+        Servo_UsToCcr(
+            Servo_AbsDegToUs(
+                Servo_RelDegToAbsDeg(deg, SERVO_Y_CENTER_OFFSET_DEG, SERVO_Y_MAX_CMD_DEG)
+            )
+        )
+    );
 }
 
 /**
  * @brief 同时设置X和Y轴舵机角度
- * @param x_deg X轴角度
- * @param y_deg Y轴角度
  */
 void Servo_SetXYDeg(float x_deg, float y_deg)
 {
@@ -81,11 +99,11 @@ void Servo_SetXYDeg(float x_deg, float y_deg)
 }
 
 /**
- * @brief 将舵机归中
- * @note 设置X和Y轴舵机到中间位置
+ * @brief 舵机归中
+ * @note 回到“安装补偿后的平台水平位”
  */
 void Servo_Center(void)
 {
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, Servo_UsToCcr(SERVO_PWM_MID_US));
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, Servo_UsToCcr(SERVO_PWM_MID_US));
+    Servo_SetXDeg(0.0f);
+    Servo_SetYDeg(0.0f);
 }

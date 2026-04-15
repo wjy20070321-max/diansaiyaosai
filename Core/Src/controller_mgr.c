@@ -11,6 +11,37 @@
 /* 全局系统上下文变量，存储系统状态和数据 */
 SystemContext_t g_sys;
 
+/* ======== 调试镜像变量：任务层 ======== */
+volatile uint8_t  dbg_task_id = 0U;
+volatile uint8_t  dbg_task_running = 0U;
+volatile uint8_t  dbg_route0 = 0U;
+volatile uint8_t  dbg_route1 = 0U;
+volatile uint8_t  dbg_route2 = 0U;
+volatile uint8_t  dbg_route3 = 0U;
+
+/* ======== 调试镜像变量：控制层 ======== */
+volatile float    dbg_ball_x_mm = 0.0f;
+volatile float    dbg_ball_y_mm = 0.0f;
+volatile uint8_t  dbg_ball_valid = 0U;
+volatile uint32_t dbg_ball_tick_ms = 0U;
+
+volatile float    dbg_target_x_mm = 0.0f;
+volatile float    dbg_target_y_mm = 0.0f;
+volatile uint8_t  dbg_ctrl_mode = 0U;
+
+/* ======== 调试镜像变量：树莓派原始快照 ======== */
+volatile float    dbg_pi_ball_x_mm = 0.0f;
+volatile float    dbg_pi_ball_y_mm = 0.0f;
+volatile float    dbg_pi_ball_vx_mmps = 0.0f;
+volatile float    dbg_pi_ball_vy_mmps = 0.0f;
+volatile uint8_t  dbg_pi_ball_valid = 0U;
+volatile uint32_t dbg_pi_ball_tick_ms = 0U;
+
+volatile float    dbg_pi_laser_x_mm = 0.0f;
+volatile float    dbg_pi_laser_y_mm = 0.0f;
+volatile uint8_t  dbg_pi_laser_valid = 0U;
+volatile uint32_t dbg_pi_laser_tick_ms = 0U;
+
 /* 外部声明的系统毫秒计时器 */
 extern volatile uint32_t g_sys_ms;
 
@@ -41,10 +72,24 @@ void ControllerMgr_UpdateInputs(void)
     uint8_t route_a = 0U, route_b = 0U, route_c = 0U, route_d = 0U;
     float target_x_dummy = 0.0f;
     float target_y_dummy = 0.0f;
+    TaskContext_t *ctx;
 
     /* 连续状态：安全快照 */
     ProtocolPi_CopyData(&pi);
     JY61P_CopyData(&imu);
+
+    /* ======== 先镜像树莓派原始快照，方便判断“到底收到没收到” ======== */
+    dbg_pi_ball_x_mm = pi.ball_x_mm;
+    dbg_pi_ball_y_mm = pi.ball_y_mm;
+    dbg_pi_ball_vx_mmps = pi.ball_vx_mmps;
+    dbg_pi_ball_vy_mmps = pi.ball_vy_mmps;
+    dbg_pi_ball_valid = pi.ball_valid;
+    dbg_pi_ball_tick_ms = pi.ball_update_ms;
+
+    dbg_pi_laser_x_mm = pi.laser_x_mm;
+    dbg_pi_laser_y_mm = pi.laser_y_mm;
+    dbg_pi_laser_valid = pi.laser_valid;
+    dbg_pi_laser_tick_ms = pi.laser_update_ms;
 
     /* 更新小球位置和速度数据 */
     g_sys.ball.x_mm = pi.ball_x_mm;
@@ -117,6 +162,25 @@ void ControllerMgr_UpdateInputs(void)
         JY61P_SetZero();
         screen->imu_zero_cmd = 0U;
     }
+
+    /* ======== 最后再镜像“已经写进系统后的值” ======== */
+    ctx = TaskMgr_GetContext();
+
+    dbg_task_id = ctx->task_id;
+    dbg_task_running = ctx->running;
+    dbg_route0 = ctx->user_route[0];
+    dbg_route1 = ctx->user_route[1];
+    dbg_route2 = ctx->user_route[2];
+    dbg_route3 = ctx->user_route[3];
+
+    dbg_ball_x_mm = g_sys.ball.x_mm;
+    dbg_ball_y_mm = g_sys.ball.y_mm;
+    dbg_ball_valid = g_sys.ball.valid;
+    dbg_ball_tick_ms = g_sys.ball.tick_ms;
+
+    dbg_target_x_mm = g_sys.ref.target_x_mm;
+    dbg_target_y_mm = g_sys.ref.target_y_mm;
+    dbg_ctrl_mode = g_sys.ref.mode;
 }
 
 /**
@@ -134,6 +198,11 @@ void ControllerMgr_Run10ms(void)
         g_sys.ref.target_y_mm = BOARD_CENTER_Y_MM;
         g_sys.ref.mode = CTRL_MODE_HOLD;
     }
+
+    /* 每次 10ms 目标更新后，也同步到调试量 */
+    dbg_target_x_mm = g_sys.ref.target_x_mm;
+    dbg_target_y_mm = g_sys.ref.target_y_mm;
+    dbg_ctrl_mode = g_sys.ref.mode;
 
     if (!g_sys.ball.valid)
     {

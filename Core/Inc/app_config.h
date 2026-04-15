@@ -112,43 +112,80 @@ extern "C" {
 
 /**
  * @brief 伺服电机最小PWM脉宽（微秒）
- * @note  对应伺服电机最小角度位置
+ * @note  参考你旧项目，同款舵机按 500~2500us 使用
  */
-#define SERVO_PWM_MIN_US                1000.0f
+#define SERVO_PWM_MIN_US                500.0f
 
 /**
  * @brief 伺服电机中位PWM脉宽（微秒）
- * @note  对应伺服电机中立位置（平台水平）
+ * @note  对应舵机中立位置
  */
 #define SERVO_PWM_MID_US                1500.0f
 
 /**
  * @brief 伺服电机最大PWM脉宽（微秒）
- * @note  对应伺服电机最大角度位置
  */
-#define SERVO_PWM_MAX_US                2000.0f
+#define SERVO_PWM_MAX_US                2500.0f
 
 /**
- * @brief 伺服电机最大控制角度（度）
- * @note  伺服电机能够达到的最大偏转角度
+ * @brief 舵机物理总角度（度）
+ * @note  参考你旧项目同款舵机参数：270°
  */
-#define SERVO_MAX_CMD_DEG               15.0f
+#define SERVO_PHYS_TOTAL_DEG            270.0f
+
+/**
+ * @brief 舵机物理中心角（度）
+ */
+#define SERVO_PHYS_CENTER_DEG           (SERVO_PHYS_TOTAL_DEG * 0.5f)
+
+/**
+ * @brief X轴舵机安装补偿角（度）
+ * @note  平台真正水平时，X轴舵机相对物理中心的偏置
+ */
+#define SERVO_X_CENTER_OFFSET_DEG       0.0f
+
+/**
+ * @brief Y轴舵机安装补偿角（度）
+ * @note  平台真正水平时，Y轴舵机相对物理中心的偏置
+ */
+#define SERVO_Y_CENTER_OFFSET_DEG       0.0f
+
+/**
+ * @brief X轴舵机最大相对控制角（度）
+ * @note  建议先保守一点，后面再按机构实测放宽
+ */
+#define SERVO_X_MAX_CMD_DEG             10.0f
+
+/**
+ * @brief Y轴舵机最大相对控制角（度）
+ */
+#define SERVO_Y_MAX_CMD_DEG             10.0f
+
+/**
+ * @brief 兼容旧内环代码的统一舵机最大控制角（度）
+ * @note  plate_inner_loop.c 仍在使用 SERVO_MAX_CMD_DEG 做限幅
+ *       这里取 X/Y 两轴较小值，保证安全
+ */
+#define SERVO_MAX_CMD_DEG               ((SERVO_X_MAX_CMD_DEG < SERVO_Y_MAX_CMD_DEG) ? SERVO_X_MAX_CMD_DEG : SERVO_Y_MAX_CMD_DEG)
 
 /**
  * @brief 平台最大倾斜参考角度（度）
  * @note  快速运动时平台允许的最大倾斜角度
+ *       ball_outer_loop.c 仍在使用这个宏，必须保留
  */
 #define BOARD_MAX_TILT_REF_DEG          8.0f
 
 /**
  * @brief 平台保持倾斜参考角度（度）
  * @note  保持球稳定时平台的微小倾斜角度
+ *       ball_outer_loop.c 仍在使用这个宏，必须保留
  */
 #define BOARD_HOLD_TILT_REF_DEG         2.5f
 
 /**
  * @brief 平台制动倾斜参考角度（度）
  * @note  制动时平台的倾斜角度，用于快速减速
+ *       ball_outer_loop.c 仍在使用这个宏，必须保留
  */
 #define BOARD_BRAKE_TILT_REF_DEG        4.0f
 
@@ -232,7 +269,12 @@ extern "C" {
  */
 #define PI_CMD_SET_TARGET               0x04U
 
-#define PI_CMD_LASER_TRACK     			 0x05U  // 新增：激光坐标下发命令
+/**
+ * @brief 激光坐标下发命令
+ * @note  树莓派向STM32发送激光点位置和有效位
+ */
+#define PI_CMD_LASER_TRACK              0x05U
+
 /* ==================== 任务ID定义 ==================== */
 
 /**
@@ -277,7 +319,10 @@ extern "C" {
  */
 #define TASK_ID_USER_ABCD               6U
 
-#define TASK_ID_TRACK_LASER    			7U     // 新增：激光追踪动态任务
+/**
+ * @brief 激光追踪动态任务
+ */
+#define TASK_ID_TRACK_LASER             7U
 
 /* ==================== 控制模式定义 ==================== */
 

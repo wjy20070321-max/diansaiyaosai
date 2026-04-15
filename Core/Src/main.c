@@ -1,204 +1,266 @@
+/* USER CODE BEGIN Header */
 /**
- ******************************************************************************
- * @file    main.c
- * @brief   球盘控制系统主程序
- * @details 本程序实现了一个基于STM32F407的球盘控制系统，通过定时器中断和任务管理器
- *          实现5ms和10ms周期的控制循环，控制球在平台上的运动。
- ******************************************************************************
- */
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "tim.h"
+#include "usart.h"
+#include "gpio.h"
 
-/* 包含系统头文件和外设驱动头文件 */
-#include "main.h"                    // 主程序头文件，包含系统配置和全局定义
-#include "gpio.h"                    // GPIO配置头文件
-#include "tim.h"                     // 定时器配置头文件
-#include "usart.h"                   // 串口配置头文件
-#include "stm32f4xx_it.h"            // 中断处理头文件
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "servo.h"
+#include "jy61p.h"
+#include "protocol_pi.h"
+#include "protocol_screen.h"
+#include "region.h"
+#include "task_mgr.h"
+#include "ball_outer_loop.h"
+#include "plate_inner_loop.h"
+#include "controller_mgr.h"
+#include "debug_port.h"
+/* USER CODE END Includes */
 
-/* 包含应用层模块头文件 */
-#include "servo.h"                   // 伺服电机控制模块
-#include "jy61p.h"                   // JY61P姿态传感器模块
-#include "protocol_pi.h"             // 树莓派通信协议模块
-#include "protocol_screen.h"         // 显示屏通信协议模块
-#include "region.h"                  // 区域管理模块
-#include "task_mgr.h"                // 任务管理器模块
-#include "ball_outer_loop.h"         // 球位置外环控制模块
-#include "plate_inner_loop.h"        // 平台姿态内环控制模块
-#include "controller_mgr.h"          // 控制器管理模块
-#include "debug_port.h"              // 调试端口模块
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
 
-/* 全局标志变量，用于定时器中断和主循环之间的通信 */
-volatile uint8_t g_flag_5ms = 0;     // 5ms周期标志位，定时器中断置1，主循环清0
-volatile uint8_t g_flag_10ms = 0;    // 10ms周期标志位，定时器中断置1，主循环清0
-volatile uint32_t g_sys_ms = 0;      // 系统运行时间计数器，单位：毫秒
+/* USER CODE END PTD */
 
-/* 静态函数声明 */
-static void SystemClock_Config(void);  // 系统时钟配置函数
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+
+/* USER CODE BEGIN PV */
+volatile uint8_t g_flag_5ms = 0;
+volatile uint8_t g_flag_10ms = 0;
+volatile uint32_t g_sys_ms = 0;
+
+volatile uint32_t dbg_sys_ms = 0U;
+volatile uint32_t dbg_5ms_cnt = 0U;
+volatile uint32_t dbg_10ms_cnt = 0U;
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
 
 /**
- * @brief  主函数
- * @note   程序入口点，负责系统初始化和主控制循环
- */
+  * @brief  The application entry point.
+  * @retval int
+  */
 int main(void)
 {
-    /* HAL库初始化，必须在其他HAL函数调用前执行 */
-    HAL_Init();
-    
-    /* 配置系统时钟，设置CPU主频为168MHz */
-    SystemClock_Config();
+  /* USER CODE BEGIN 1 */
 
-    /* 初始化外设 */
-    MX_GPIO_Init();                    // 初始化GPIO引脚
-    MX_TIM2_Init();                    // 初始化定时器2（可能用于PWM输出）
-    MX_TIM6_Init();                    // 初始化定时器6（用于系统时基，1ms中断）
-    MX_USART1_UART_Init();             // 初始化USART1（串口1）
-    MX_USART3_UART_Init();             // 初始化USART3（串口3）
-    MX_USART6_UART_Init();             // 初始化USART6（串口6）
+  /* USER CODE END 1 */
 
-    /* 初始化应用层模块 */
-    Servo_Init();                      // 伺服电机初始化
-    JY61P_Init();                      // JY61P姿态传感器初始化
-    ProtocolPi_Init();                 // 树莓派通信协议初始化
-    ProtocolScreen_Init();             // 显示屏通信协议初始化
-    Region_Init();                     // 区域管理初始化
-    TaskMgr_Init();                    // 任务管理器初始化
-    BallOuterLoop_Init();              // 球位置外环控制初始化
-    PlateInnerLoop_Init();             // 平台姿态内环控制初始化
-    ControllerMgr_Init();              // 控制器管理器初始化
+  HAL_Init();
 
-    /* 启动外设功能 */
-    BSP_UART_StartReceiveIT();         // 启动串口中断接收
-    HAL_TIM_Base_Start_IT(&htim6);     // 启动定时器6中断（1ms周期）
-    Servo_Center();                    // 将伺服电机归中（平台水平位置）
+  /* USER CODE BEGIN Init */
 
-    /* 系统启动延迟和校准 */
-    HAL_Delay(1500);                   // 延迟1.5秒，等待系统稳定
-    JY61P_SetZero();                   // 设置JY61P传感器零点（平台水平校准）
-    ProtocolScreen_SendText("READY\r\n");  // 向显示屏发送就绪信息
+  /* USER CODE END Init */
 
-    /* 主控制循环 */
-    while (1)
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* 初始化底层外设 */
+  MX_GPIO_Init();
+  MX_TIM2_Init();
+  MX_TIM6_Init();
+  MX_TIM12_Init();
+  MX_USART1_UART_Init();
+  MX_USART3_UART_Init();
+  MX_USART6_UART_Init();
+
+  /* USER CODE BEGIN 2 */
+  /* 初始化应用层模块 */
+  Servo_Init();
+  JY61P_Init();
+  ProtocolPi_Init();
+  ProtocolScreen_Init();
+  Region_Init();
+  TaskMgr_Init();
+  BallOuterLoop_Init();
+  PlateInnerLoop_Init();
+  ControllerMgr_Init();
+
+  /* 启动串口中断接收 */
+  BSP_UART_StartReceiveIT();
+
+  /* 启动 1ms 定时节拍 */
+  HAL_TIM_Base_Start_IT(&htim6);
+
+  /* 舵机归中 */
+  Servo_Center();
+
+  /* 等系统稳定 */
+  HAL_Delay(1500);
+
+  /* IMU 置零 */
+  JY61P_SetZero();
+
+  /* 没有串口屏也没关系，这句保留不会影响调试 */
+  ProtocolScreen_SendText("READY\r\n");
+  /* USER CODE END 2 */
+
+  while (1)
+  {
+    /* USER CODE BEGIN WHILE */
+    ControllerMgr_UpdateInputs();
+
+    if (g_flag_5ms)
     {
-        /* 更新控制器输入数据（如传感器数据、通信数据等） */
-        ControllerMgr_UpdateInputs();
-
-        /* 5ms控制周期处理 */
-        if (g_flag_5ms)
-        {
-            g_flag_5ms = 0;            // 清除5ms标志位
-            ControllerMgr_Run5ms();    // 执行5ms周期的控制任务
-        }
-
-        /* 10ms控制周期处理 */
-        if (g_flag_10ms)
-        {
-            g_flag_10ms = 0;           // 清除10ms标志位
-            ControllerMgr_Run10ms();   // 执行10ms周期的控制任务
-        }
+      g_flag_5ms = 0U;
+      ControllerMgr_Run5ms();
     }
+
+    if (g_flag_10ms)
+    {
+      g_flag_10ms = 0U;
+      ControllerMgr_Run10ms();
+    }
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+
+    /* USER CODE END 3 */
+  }
 }
 
 /**
- * @brief  定时器周期结束回调函数
- * @param  htim: 定时器句柄指针
- * @note   此函数在定时器中断中被调用，用于实现系统时基和周期性任务调度
- *         定时器6配置为1ms中断，用于产生5ms和10ms的控制周期
- */
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLN = 168;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 4;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK
+                              | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/* USER CODE BEGIN 4 */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-    static uint8_t cnt5 = 0;           // 5ms计数器
-    static uint8_t cnt10 = 0;          // 10ms计数器
+  static uint8_t cnt5 = 0U;
+  static uint8_t cnt10 = 0U;
 
-    /* 检查是否是定时器6的中断（系统时基定时器） */
-    if (htim->Instance == TIM6)
+  if (htim->Instance == TIM6)
+  {
+    PiRxData_t pi_snapshot;
+
+    g_sys_ms++;
+    dbg_sys_ms = g_sys_ms;
+
+    ProtocolPi_CopyData(&pi_snapshot);
+    TaskMgr_Update1ms(pi_snapshot.ball_x_mm, pi_snapshot.ball_y_mm, pi_snapshot.ball_valid);
+
+    cnt5++;
+    cnt10++;
+
+    if (cnt5 >= 5U)
     {
-        /* 获取树莓派通信数据指针 */
-        PiRxData_t *pi = ProtocolPi_GetData();
-        
-        /* 系统时间递增 */
-        g_sys_ms++;
-        
-        /* 更新任务管理器，传入球的位置信息和有效性标志 */
-        TaskMgr_Update1ms(pi->ball_x_mm, pi->ball_y_mm, pi->ball_valid);
-
-        /* 5ms周期计数 */
-        cnt5++;
-        /* 10ms周期计数 */
-        cnt10++;
-        
-        /* 检查是否达到5ms周期 */
-        if (cnt5 >= 5U)
-        {
-            cnt5 = 0U;                 // 计数器清零
-            g_flag_5ms = 1U;           // 置位5ms标志，通知主循环执行5ms任务
-        }
-        
-        /* 检查是否达到10ms周期 */
-        if (cnt10 >= 10U)
-        {
-            cnt10 = 0U;                // 计数器清零
-            g_flag_10ms = 1U;          // 置位10ms标志，通知主循环执行10ms任务
-        }
+      cnt5 = 0U;
+      g_flag_5ms = 1U;
+      dbg_5ms_cnt++;
     }
+
+    if (cnt10 >= 10U)
+    {
+      cnt10 = 0U;
+      g_flag_10ms = 1U;
+      dbg_10ms_cnt++;
+    }
+  }
 }
+/* USER CODE END 4 */
 
 /**
- * @brief  系统时钟配置函数
- * @note   配置STM32F407的系统时钟为168MHz
- *         使用HSI(16MHz)作为PLL输入源，通过PLL倍频到168MHz
- *         配置AHB、APB1、APB2总线时钟分频
- */
-static void SystemClock_Config(void)
-{
-    /* 定义时钟配置结构体 */
-    RCC_OscInitTypeDef RCC_OscInitStruct = {0};    // 振荡器配置结构体
-    RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};  // 时钟配置结构体
-
-    /* 使能电源时钟并配置电压调节器 */
-    __HAL_RCC_PWR_CLK_ENABLE();            // 使能PWR时钟
-    __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);  // 配置电压等级1（最高性能）
-
-    /* 配置振荡器 */
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;  // 使用内部高速时钟
-    RCC_OscInitStruct.HSIState = RCC_HSI_ON;       // 使能HSI
-    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;  // 使用默认校准值
-    RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;   // 使能PLL
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;  // PLL输入源为HSI
-    RCC_OscInitStruct.PLL.PLLM = 16;               // PLL输入分频系数 M=16 (16MHz/16=1MHz)
-    RCC_OscInitStruct.PLL.PLLN = 336;              // PLL倍频系数 N=336 (1MHz*336=336MHz)
-    RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;    // PLL输出分频系数 P=2 (336MHz/2=168MHz)
-    RCC_OscInitStruct.PLL.PLLQ = 7;                // USB OTG FS、SDIO、随机数发生器时钟分频系数
-    if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
-    {
-        Error_Handler();                   // 配置失败则进入错误处理
-    }
-
-    /* 配置系统时钟 */
-    RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK |
-                                  RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
-    RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;  // 系统时钟源为PLL输出
-    RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;         // AHB时钟 = SYSCLK/1 = 168MHz
-    RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;          // APB1时钟 = HCLK/4 = 42MHz
-    RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;          // APB2时钟 = HCLK/2 = 84MHz
-    if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_5) != HAL_OK)
-    {
-        Error_Handler();                   // 配置失败则进入错误处理
-    }
-
-    /* 配置SysTick定时器，用于HAL库的延时功能 */
-    HAL_SYSTICK_Config(HAL_RCC_GetHCLKFreq() / 1000U);  // 配置1ms中断
-    HAL_SYSTICK_CLKSourceConfig(SYSTICK_CLKSOURCE_HCLK);  // SysTick时钟源为HCLK
-}
-
-/**
- * @brief  错误处理函数
- * @note   当系统发生严重错误时调用此函数
- *         禁用所有中断并进入死循环，防止系统继续运行
- */
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
 void Error_Handler(void)
 {
-    __disable_irq();                       // 禁用全局中断
-    while (1)
-    {
-        // 死循环，等待看门狗复位或手动复位
-    }
+  /* USER CODE BEGIN Error_Handler_Debug */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
 }
+
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
