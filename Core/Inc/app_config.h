@@ -281,7 +281,7 @@ extern "C" {
 /**
  * @brief IMU 横滚角方向是否反向
  */
-#define IMU_ROLL_REVERSE                0
+#define IMU_ROLL_REVERSE                1
 
 /**
  * @brief IMU 俯仰角方向是否反向
