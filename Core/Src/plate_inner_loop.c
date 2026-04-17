@@ -69,7 +69,7 @@ void PlateInnerLoop_Run(float theta_x_ref, float theta_y_ref,
 {
     /* -------------------- PD 参数 -------------------- */
     /* 这里直接把参数写成常量，表示当前版本内环用固定参数 */
-    const float kp = 1.00f;   // 比例系数：决定角度误差的纠正强度
+    const float kp = 8.00f;   // 比例系数：决定角度误差的纠正强度
     const float kd = 0.08f;   // 微分系数：决定角速度阻尼强度
 
     /* 中间控制量 */

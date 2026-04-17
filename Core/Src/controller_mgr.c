@@ -484,12 +484,21 @@ void ControllerMgr_Run5ms(void)
     }
 
     /* -------------------- 运行内环 -------------------- */
+    /* 【修改】
+       你当前实测关系是：
+       - 左边上 -> pitch 增加
+       - 下边上 -> roll 增加
+
+       所以平台坐标与 IMU 坐标系相差 90°：
+       - X轴（左右）应使用 pitch / gyro_y
+       - Y轴（上下）应使用 roll / gyro_x
+     */
     PlateInnerLoop_Run(g_sys.ref.theta_x_ref_deg,
                        g_sys.ref.theta_y_ref_deg,
-                       g_sys.imu.roll_deg - g_sys.imu.roll_zero,
                        g_sys.imu.pitch_deg - g_sys.imu.pitch_zero,
-                       g_sys.imu.gyro_x_dps,
+                       g_sys.imu.roll_deg - g_sys.imu.roll_zero,
                        g_sys.imu.gyro_y_dps,
+                       g_sys.imu.gyro_x_dps,
                        &inner);
 
     /* 写回系统上下文 */

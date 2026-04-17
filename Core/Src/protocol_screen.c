@@ -111,10 +111,10 @@ static uint8_t ParseU8List(const char *s, uint8_t *out, uint8_t max_cnt)
  */
 static void ProtocolScreen_ParseLine(char *line)
 {
-    unsigned int t = 0U;                 // 临时任务号变量
-    unsigned int rid = 0U;               // 临时区域号变量
+    unsigned int t = 0U;                    // 临时任务号变量
+    unsigned int rid = 0U;                  // 临时区域号变量
     uint8_t temp_route[USER_ROUTE_MAX_LEN]; // 临时路径数组
-    uint8_t len = 0U;                    // 临时路径长度
+    uint8_t len = 0U;                       // 临时路径长度
 
     /* -------------------- START -------------------- */
     /* 启动当前任务 */
@@ -217,6 +217,26 @@ static void ProtocolScreen_ParseLine(char *line)
     }
 }
 
+/* 【新增】判断一行命令的起始字符是否合法 */
+static uint8_t Screen_IsCmdStartByte(uint8_t byte)
+{
+    return (byte >= 'A' && byte <= 'Z') ? 1U : 0U;
+}
+
+/* 【新增】判断命令正文字符是否合法 */
+static uint8_t Screen_IsCmdBodyByte(uint8_t byte)
+{
+    if (byte >= 'A' && byte <= 'Z') return 1U;
+    if (byte >= '0' && byte <= '9') return 1U;
+    if (byte == '=') return 1U;
+    if (byte == ',') return 1U;
+    if (byte == ' ') return 1U;
+    if (byte == '-') return 1U;
+    if (byte == '.') return 1U;
+    if (byte == '_') return 1U;
+    return 0U;
+}
+
 /**
  * @brief 串口屏协议模块初始化
  *
@@ -251,6 +271,11 @@ ScreenRxData_t* ProtocolScreen_GetData(void)
  *       - '\r'：忽略
  *       - '\n'：表示一整条命令结束，立即解析
  *       - 其他字符：追加到当前命令行缓冲区
+ *
+ *       【修改】
+ *       为了兼容串口屏返回的 0x00 / 0x04 / 0x88 / 0xFF 等二进制脏数据，
+ *       这里只允许合法命令字符进入缓冲区。
+ *       一旦中途混入脏数据，则当前这一行直接丢弃。
  */
 void ProtocolScreen_RxByte(uint8_t byte)
 {
@@ -263,13 +288,34 @@ void ProtocolScreen_RxByte(uint8_t byte)
     /* 遇到换行符，表示一整行命令接收完成 */
     if (byte == '\n')
     {
-        g_line[g_idx] = '\0';             // 补上字符串结束符
-        ProtocolScreen_ParseLine(g_line); // 解析这一整行命令
-        g_idx = 0U;                       // 准备接收下一行
+        if (g_idx > 0U)
+        {
+            g_line[g_idx] = '\0';             // 补上字符串结束符
+            ProtocolScreen_ParseLine(g_line); // 解析这一整行命令
+        }
+        g_idx = 0U;                           // 准备接收下一行
         return;
     }
 
-    /* 普通字符写入缓冲区 */
+    /* 行首只允许命令首字符进入，脏数据直接丢弃 */
+    if (g_idx == 0U)
+    {
+        if (!Screen_IsCmdStartByte(byte))
+        {
+            return;
+        }
+    }
+    else
+    {
+        /* 行中如果混入非法字符，则这一整行作废 */
+        if (!Screen_IsCmdBodyByte(byte))
+        {
+            g_idx = 0U;
+            return;
+        }
+    }
+
+    /* 普通合法字符写入缓冲区 */
     if (g_idx < (sizeof(g_line) - 1U))
     {
         g_line[g_idx++] = (char)byte;
