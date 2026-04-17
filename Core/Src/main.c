@@ -2,7 +2,7 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : 主程序入口文件（当前为舵机单独调试版）
+  * @brief          : 主程序入口文件
   ******************************************************************************
   * @attention
   *
@@ -78,82 +78,12 @@ volatile uint32_t dbg_10ms_cnt = 0U; // 调试观察用 10ms 任务触发次数
 void SystemClock_Config(void);
 
 /* USER CODE BEGIN PFP */
-/* 舵机调试序列函数声明 */
-static void Servo_DebugRunSequence(void);
+/* 这里可以放你自己的函数声明，目前为空 */
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/**
- * @brief 舵机单独调试序列
- * @note 关闭闭环后，按固定顺序循环测试两个舵机：
- *       1. 回中
- *       2. X轴 +2°
- *       3. X轴回中
- *       4. X轴 -2°
- *       5. X轴回中
- *       6. Y轴 +2°
- *       7. Y轴回中
- *       8. Y轴 -2°
- *       9. Y轴回中
- *
- *       每一步停留 1000ms。
- *       你后面如果想调大一点，可以把 2.0f 改成 3.0f / 5.0f。
- */
-static void Servo_DebugRunSequence(void)
-{
-  static uint8_t step = 0U;
-  static uint32_t last_ms = 0U;
-
-  if ((g_sys_ms - last_ms) < 1000U)
-  {
-    return;
-  }
-
-  last_ms = g_sys_ms;
-
-  switch (step)
-  {
-    case 0:
-      Servo_Center();
-      break;
-
-    case 1:
-      Servo_SetXDeg(10.0f);
-      break;
-
-    case 2:
-      Servo_SetXDeg(0.0f);
-      break;
-
-    case 3:
-      Servo_SetXDeg(-10.0f);
-      break;
-
-    case 4:
-      Servo_SetXDeg(0.0f);
-      break;
-
-    case 5:
-      Servo_SetYDeg(90.0f);
-      break;
-
-    case 6:
-      Servo_SetYDeg(0.0f);
-      break;
-
-    case 7:
-      Servo_SetYDeg(-90.0f);
-      break;
-
-    default:
-      Servo_SetYDeg(0.0f);
-      step = 0U;
-      return;
-  }
-
-  step++;
-}
+/* 这里可以放用户自定义的私有函数，目前为空 */
 /* USER CODE END 0 */
 
 /**
@@ -185,13 +115,13 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* -------------------- 初始化底层外设 -------------------- */
-  MX_GPIO_Init();        // 初始化 GPIO
-  MX_TIM2_Init();        // 初始化 TIM2（当前舵机实际使用的 PWM 定时器）
-  MX_TIM6_Init();        // 初始化 TIM6（1ms 定时节拍）
-  MX_TIM12_Init();       // 初始化 TIM12（当前工程保留，不参与本次舵机调试）
-  MX_USART1_UART_Init(); // 初始化 USART1（通常接树莓派）
-  MX_USART3_UART_Init(); // 初始化 USART3（通常接 JY61P）
-  MX_USART6_UART_Init(); // 初始化 USART6（通常接串口屏）
+  MX_GPIO_Init();       // 初始化 GPIO
+  MX_TIM2_Init();       // 初始化 TIM2（项目里保留的定时器）
+  MX_TIM6_Init();       // 初始化 TIM6（1ms 定时节拍）
+  MX_TIM12_Init();      // 初始化 TIM12（舵机 PWM 输出）
+  MX_USART1_UART_Init();// 初始化 USART1（通常接树莓派）
+  MX_USART3_UART_Init();// 初始化 USART3（通常接 JY61P）
+  MX_USART6_UART_Init();// 初始化 USART6（通常接串口屏）
 
   /* USER CODE BEGIN 2 */
   /* -------------------- 初始化应用层模块 -------------------- */
@@ -237,25 +167,34 @@ int main(void)
        - 树莓派视觉数据
        - IMU 数据
        - 串口屏命令
-       - 任务状态
-       即便当前不跑闭环，保留这一步也方便你看状态 */
+       - 任务状态 */
     ControllerMgr_UpdateInputs();
 
-    /* -------------------- 舵机单独调试模式 --------------------
-       当前先不跑 5ms / 10ms 闭环控制，
-       只执行固定舵机测试序列，避免控制器抢占舵机输出。 */
-    Servo_DebugRunSequence();
+    /* 5ms 控制任务
+       一般用于内环：平台姿态控制、舵机控制等更快的闭环 */
+    if (g_flag_5ms)
+    {
+      g_flag_5ms = 0U;      // 先清标志，避免重复执行
+      ControllerMgr_Run5ms();
+    }
 
+    /* 10ms 控制任务
+       一般用于外环：小球位置控制、任务目标更新等 */
+    if (g_flag_10ms)
+    {
+      g_flag_10ms = 0U;     // 先清标志，避免重复执行
+      ControllerMgr_Run10ms();
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    static uint32_t screen_last_ms = 0U;
+	static uint32_t screen_last_ms = 0U;
 
-    if ((g_sys_ms - screen_last_ms) >= 100U)
-    {
-      screen_last_ms = g_sys_ms;
-      ProtocolScreen_SendStatus();
-    }
+	if ((g_sys_ms - screen_last_ms) >= 100U)
+	{
+	screen_last_ms = g_sys_ms;
+	ProtocolScreen_SendStatus();
+}
     /* USER CODE END 3 */
   }
 }
