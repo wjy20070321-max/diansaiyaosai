@@ -168,12 +168,14 @@ extern "C" {
 
 /**
  * @brief 舵机有效工作区最小角（度）
- * @note  机构实际单调有效区：0~180°
+ * @note  当前机械实测安全单调区：0~120°
  */
 #define SERVO_WORK_MIN_DEG              0.0f
 
 /**
  * @brief 舵机有效工作区最大角（度）
+ * @note  【修改】原来按 180°，现在按你们实物改成 120°
+ *       因为超过 120° 会机械卡死
  */
 #define SERVO_WORK_MAX_DEG              120.0f
 
@@ -195,19 +197,51 @@ extern "C" {
 #define SERVO_Y_CENTER_OFFSET_DEG       0.0f
 
 /**
- * @brief X 轴舵机最大命令角（度）
- * @note  控制器下发到舵机的最大偏转量
+ * @brief X 轴舵机负向最大命令角（度）
+ * @note  【新增】以 90° 为中位时：
+ *       - 90 -> 0   可走 90°
+ *       因此负向安全范围保留到 -90°
  */
-#define SERVO_X_MAX_CMD_DEG             90.0f
+#define SERVO_X_NEG_MAX_CMD_DEG         90.0f
+
+/**
+ * @brief X 轴舵机正向最大命令角（度）
+ * @note  【新增】以 90° 为中位时：
+ *       - 90 -> 120 只可走 30°
+ *       因此正向安全范围限制为 +30°
+ */
+#define SERVO_X_POS_MAX_CMD_DEG         30.0f
+
+/**
+ * @brief Y 轴舵机负向最大命令角（度）
+ * @note  【新增】当前先按与你描述相同的机械边界处理
+ */
+#define SERVO_Y_NEG_MAX_CMD_DEG         90.0f
+
+/**
+ * @brief Y 轴舵机正向最大命令角（度）
+ * @note  【新增】当前先按与你描述相同的机械边界处理
+ */
+#define SERVO_Y_POS_MAX_CMD_DEG         30.0f
+
+/**
+ * @brief X 轴舵机最大命令角（度）
+ * @note  【兼容保留】为避免旧代码里仍引用该宏，
+ *       这里保守地取“更小的正向极限值”
+ */
+#define SERVO_X_MAX_CMD_DEG             (SERVO_X_POS_MAX_CMD_DEG)
 
 /**
  * @brief Y 轴舵机最大命令角（度）
+ * @note  【兼容保留】为避免旧代码里仍引用该宏，
+ *       这里保守地取“更小的正向极限值”
  */
-#define SERVO_Y_MAX_CMD_DEG             90.0f
+#define SERVO_Y_MAX_CMD_DEG             (SERVO_Y_POS_MAX_CMD_DEG)
 
 /**
  * @brief 舵机最大命令角统一值
- * @note  取 X/Y 两轴里更小的那个，保证整体安全
+ * @note  【兼容保留】旧代码如果仍用统一对称限幅，
+ *       则按最保守的正向上限处理，避免机械撞限位
  */
 #define SERVO_MAX_CMD_DEG               ((SERVO_X_MAX_CMD_DEG < SERVO_Y_MAX_CMD_DEG) ? SERVO_X_MAX_CMD_DEG : SERVO_Y_MAX_CMD_DEG)
 

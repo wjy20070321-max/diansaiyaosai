@@ -100,7 +100,11 @@ void PlateInnerLoop_Run(float theta_x_ref, float theta_y_ref,
     uy = kp * (theta_y_ref - theta_y_meas) + kd * (0.0f - gyro_y_meas);
 
     /* -------------------- 输出限幅 -------------------- */
-    /* 舵机命令角必须限制在允许范围内，避免超出机械安全范围 */
-    out->servo_x_cmd_deg = Limitf(ux, -SERVO_MAX_CMD_DEG, SERVO_MAX_CMD_DEG);
-    out->servo_y_cmd_deg = Limitf(uy, -SERVO_MAX_CMD_DEG, SERVO_MAX_CMD_DEG);
+    /* 【修改】
+       这里原来是对称限幅：[-SERVO_MAX_CMD_DEG, +SERVO_MAX_CMD_DEG]
+       现在改成非对称限幅，以匹配真实机械边界：
+       - 负向可走到 -90°
+       - 正向只允许到 +30° */
+    out->servo_x_cmd_deg = Limitf(ux, -SERVO_X_NEG_MAX_CMD_DEG, SERVO_X_POS_MAX_CMD_DEG);
+    out->servo_y_cmd_deg = Limitf(uy, -SERVO_Y_NEG_MAX_CMD_DEG, SERVO_Y_POS_MAX_CMD_DEG);
 }

@@ -51,7 +51,8 @@ static float Servo_AbsDegToUs(float abs_deg)
  * @brief 将“相对平台中心角”转换为“舵机绝对角度”
  * @param rel_deg           相对平台中心的目标角度，单位：度，可正可负
  * @param center_offset_deg 舵机安装中心补偿角，单位：度
- * @param max_cmd_deg       当前轴允许的最大相对控制角，单位：度
+ * @param neg_max_cmd_deg   负向最大相对控制角，单位：度
+ * @param pos_max_cmd_deg   正向最大相对控制角，单位：度
  * @retval 转换后的绝对舵机角度，单位：度
  *
  * @note 这是这个舵机模块里很关键的一步：
@@ -73,13 +74,26 @@ static float Servo_AbsDegToUs(float abs_deg)
  *       1. 先把相对命令角 rel_deg 限制在允许控制范围内
  *       2. 再以机构中心角 SERVO_WORK_CENTER_DEG 为基准，换算成绝对角
  *       3. 最后把结果限制在机构有效工作区 [SERVO_WORK_MIN_DEG, SERVO_WORK_MAX_DEG]
+ *
+ *       【修改】
+ *       这里原来是“对称限幅”，即 ±max_cmd_deg。
+ *       现在改成“非对称限幅”：
+ *       - 负向最多到 -neg_max_cmd_deg
+ *       - 正向最多到 +pos_max_cmd_deg
+ *
+ *       这是为了匹配你当前机械真实边界：
+ *       - 90 -> 0   可以走 90°
+ *       - 90 -> 120 只能走 30°
  */
-static float Servo_RelDegToAbsDeg(float rel_deg, float center_offset_deg, float max_cmd_deg)
+static float Servo_RelDegToAbsDeg(float rel_deg,
+                                  float center_offset_deg,
+                                  float neg_max_cmd_deg,
+                                  float pos_max_cmd_deg)
 {
     float abs_deg;
 
-    /* 先对“相对控制角”做限幅，防止控制器给出的命令过大 */
-    rel_deg = Limitf(rel_deg, -max_cmd_deg, max_cmd_deg);
+    /* 【修改】非对称限幅，按真实机械边界分别限制正向和负向 */
+    rel_deg = Limitf(rel_deg, -neg_max_cmd_deg, pos_max_cmd_deg);
 
     /* 关键步骤：
        绝对角 = 机构中心角 + 安装补偿角 + 相对偏转角
@@ -140,9 +154,10 @@ void Servo_SetXDeg(float deg)
         Servo_UsToCcr(         // 脉宽 -> CCR
             Servo_AbsDegToUs(  // 绝对角 -> 脉宽
                 Servo_RelDegToAbsDeg(
-                    deg,                       // 当前相对角度命令
-                    SERVO_X_CENTER_OFFSET_DEG,// X 轴安装中心补偿
-                    SERVO_X_MAX_CMD_DEG       // X 轴最大允许相对命令角
+                    deg,                        // 当前相对角度命令
+                    SERVO_X_CENTER_OFFSET_DEG, // X 轴安装中心补偿
+                    SERVO_X_NEG_MAX_CMD_DEG,   // 【修改】X 轴负向最大允许相对命令角
+                    SERVO_X_POS_MAX_CMD_DEG    // 【修改】X 轴正向最大允许相对命令角
                 )
             )
         )
@@ -173,9 +188,10 @@ void Servo_SetYDeg(float deg)
         Servo_UsToCcr(
             Servo_AbsDegToUs(
                 Servo_RelDegToAbsDeg(
-                    deg,                       // 当前相对角度命令
-                    SERVO_Y_CENTER_OFFSET_DEG,// Y 轴安装中心补偿
-                    SERVO_Y_MAX_CMD_DEG       // Y 轴最大允许相对命令角
+                    deg,                        // 当前相对角度命令
+                    SERVO_Y_CENTER_OFFSET_DEG, // Y 轴安装中心补偿
+                    SERVO_Y_NEG_MAX_CMD_DEG,   // 【修改】Y 轴负向最大允许相对命令角
+                    SERVO_Y_POS_MAX_CMD_DEG    // 【修改】Y 轴正向最大允许相对命令角
                 )
             )
         )
