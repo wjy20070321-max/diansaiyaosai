@@ -91,7 +91,7 @@ ScreenRxData_t* ProtocolScreen_GetData(void);
  * @param text 要发送的字符串指针
  *
  * @note 具体走哪个串口，以 protocol_screen.c 里的实现为准。
- *       你当前这版实现已改为 huart2。 :contentReference[oaicite:2]{index=2}
+ *       你当前这版实现已改为 huart2。 
  */
 void ProtocolScreen_SendText(const char *text);
 
