@@ -7,15 +7,12 @@
 /* -------------------- 串口屏接收数据结构体 -------------------- */
 /**
  * @brief 串口屏接收到的数据结构体
- * @note 该结构体用于统一保存从串口屏解析出来的控制命令和参数
- *
- *       串口屏在这个项目里主要承担“人机交互”功能，
- *       也就是让你通过屏幕下发：
- *       - 任务启动/停止
+ * @note 串口屏主要承担“人机交互”功能，用来下发：
+ *       - 任务启动 / 停止
  *       - IMU 置零
- *       - 指定坐标点
+ *       - 单点目标（当前版本为区域号 1~9）
  *       - 指定区域
- *       - 路径任务
+ *       - 区域路径任务
  *       - 两点往返任务
  */
 typedef struct
@@ -26,20 +23,34 @@ typedef struct
     uint8_t stop_cmd;       // 停止命令标志：1=收到停止命令
     uint8_t imu_zero_cmd;   // IMU 置零命令标志：1=收到置零命令
 
-    /* -------------------- 指定坐标点任务 -------------------- */
-    uint8_t point_valid;    // 指定点是否有效：1=有效，0=无效
-    float point_x_mm;       // 指定目标点 X 坐标，单位：毫米
-    float point_y_mm;       // 指定目标点 Y 坐标，单位：毫米
+    /* -------------------- 单点任务（区域 1~9） -------------------- */
+    /**
+     * @note 当前这版里，POINT=n 不再表示“坐标点”，
+     *       而是表示“区域编号 n”。
+     *       例如：
+     *       - POINT=1 表示去 1 号区
+     *       - POINT=5 表示去中心区
+     */
+    uint8_t point_valid;        // 单点命令是否有效：1=有效，0=无效
+    uint8_t point_region_id;    // 单点目标区域编号（1~9）
 
     /* -------------------- 指定区域任务 -------------------- */
-    uint8_t region_valid;   // 指定区域命令是否有效：1=有效，0=无效
-    uint8_t region_id;      // 目标区域编号
+    /**
+     * @note REGION=n 是兼容写法，本质上也是指定 1~9 号区域。
+     */
+    uint8_t region_valid;       // 指定区域命令是否有效：1=有效，0=无效
+    uint8_t region_id;          // 目标区域编号（1~9）
 
     /* -------------------- 路径任务 -------------------- */
-    uint8_t route_valid;        // 路径命令是否有效：1=有效，0=无效
-    uint8_t route_pass_mode;    // 路径模式标志：如“经过不停留”或“到点停留”
-    uint8_t route_len;          // 路径长度，即路径中有效点个数
-    uint8_t route[USER_ROUTE_MAX_LEN]; // 路径点数组，保存一串区域编号
+    /**
+     * @note route_pass_mode 含义：
+     *       - 0：逐点停留
+     *       - 1：中间点只经过，最后一点停留
+     */
+    uint8_t route_valid;                // 路径命令是否有效：1=有效，0=无效
+    uint8_t route_pass_mode;            // 路径模式：0=逐点停留，1=中间经过不停留
+    uint8_t route_len;                  // 路径长度
+    uint8_t route[USER_ROUTE_MAX_LEN];  // 路径点数组（区域编号）
 
     /* -------------------- 两点往返任务 -------------------- */
     uint8_t roundtrip_valid;    // 两点往返命令是否有效：1=有效，0=无效
@@ -55,52 +66,45 @@ typedef struct
 
 /**
  * @brief 串口屏协议模块初始化
- * @note 用于初始化内部状态机、接收缓冲区和 ScreenRxData_t 结构体
+ * @note 清空解析状态、接收缓冲和命令结构体
  */
 void ProtocolScreen_Init(void);
 
 /**
- * @brief 串口屏单字节接收处理函数
- * @param byte 串口收到的一个字节
+ * @brief 处理串口收到的单个字节
+ * @param byte 当前收到的一个字节
  *
- * @note 一般在 USART 接收中断中调用。
- *       该函数负责把串口屏发来的字节流逐步解析成完整命令。
+ * @note 当前协议是“按文本行解析”的：
+ *       - '\r' 忽略
+ *       - '\n' 表示一整条命令结束
  */
 void ProtocolScreen_RxByte(uint8_t byte);
 
 /**
- * @brief 获取串口屏当前接收数据结构体指针
- * @retval 指向 ScreenRxData_t 全局对象的指针
- *
- * @note 通过这个接口，控制器模块可以读取串口屏当前解析出的命令状态。
+ * @brief 获取当前串口屏解析结果结构体指针
+ * @retval 指向内部 ScreenRxData_t 的指针
  */
 ScreenRxData_t* ProtocolScreen_GetData(void);
 
 /**
- * @brief 向串口屏发送文本字符串
+ * @brief 发送字符串到串口屏
  * @param text 要发送的字符串指针
  *
- * @note 该接口通常用于简单调试输出或给串口屏发送提示信息。
- *       例如：
- *       - READY
- *       - 当前状态提示
- *       - 调试信息
+ * @note 具体走哪个串口，以 protocol_screen.c 里的实现为准。
+ *       你当前这版实现已改为 huart2。 :contentReference[oaicite:2]{index=2}
  */
 void ProtocolScreen_SendText(const char *text);
 
-/* -------------------- 主动状态上报接口 -------------------- */
 /**
- * @brief 主动发送系统状态到串口屏
- *
- * @note 这个函数是新增的主动上报接口，
- *       可用于定期把系统当前状态发送到屏幕显示，例如：
- *       - 当前任务 ID
- *       - 球是否有效
- *       - 当前坐标
- *       - 控制模式
- *       - 运行状态等
- *
- *       具体发送哪些内容，要看 protocol_screen.c 里的实现。
+ * @brief 主动发送当前系统状态到串口屏
+ * @note 通常用于周期上报：
+ *       - 小球坐标
+ *       - 目标坐标
+ *       - 当前区域
+ *       - 当前任务号
+ *       - 运行/完成/失败状态
+ *       - 保持时间
+ *       - 总运行时间
  */
 void ProtocolScreen_SendStatus(void);
 

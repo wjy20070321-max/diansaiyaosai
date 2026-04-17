@@ -8,9 +8,9 @@
 #include <stdlib.h>           // strtoul() 用到的标准库函数
 
 /* -------------------- 模块内静态全局变量 -------------------- */
-/* g_screen：保存当前解析出来的串口屏命令结果
-   g_line  ：保存当前正在接收的一整行文本命令
-   g_idx   ：当前已接收的字符个数 */
+/* g_screen：保存当前解析得到的串口屏命令
+   g_line  ：保存当前接收中的一整行文本命令
+   g_idx   ：当前行缓冲区写入位置 */
 static ScreenRxData_t g_screen;
 static char g_line[96];
 static uint8_t g_idx = 0U;
@@ -30,10 +30,10 @@ extern volatile uint32_t g_sys_ms;
  *       "1,2,6,9"
  *       这样的区域编号序列。
  *
- *       解析特点：
+ *       特点：
  *       - 自动跳过空格和逗号
  *       - 按十进制解析
- *       - 最多解析 max_cnt 个
+ *       - 最多只解析 max_cnt 个数
  */
 static uint8_t ParseU8List(const char *s, uint8_t *out, uint8_t max_cnt)
 {
@@ -56,7 +56,7 @@ static uint8_t ParseU8List(const char *s, uint8_t *out, uint8_t max_cnt)
             s++;
         }
 
-        /* 如果已经到字符串末尾，则停止 */
+        /* 如果已经到字符串结尾，则停止 */
         if (*s == '\0')
         {
             break;
@@ -65,7 +65,7 @@ static uint8_t ParseU8List(const char *s, uint8_t *out, uint8_t max_cnt)
         /* 解析一个十进制无符号整数 */
         v = strtoul(s, &endptr, 10);
 
-        /* 如果 endptr 没前进，说明这里不是合法数字 */
+        /* 如果没有成功解析到数字，则退出 */
         if (endptr == s)
         {
             break;
@@ -75,7 +75,7 @@ static uint8_t ParseU8List(const char *s, uint8_t *out, uint8_t max_cnt)
         out[cnt++] = (uint8_t)v;
         s = endptr;
 
-        /* 跳过数字后面的空格 */
+        /* 跳过数字后的空格 */
         while (*s == ' ')
         {
             s++;
@@ -95,16 +95,16 @@ static uint8_t ParseU8List(const char *s, uint8_t *out, uint8_t max_cnt)
  * @brief 解析一整行串口屏命令
  * @param line 一行以 '\0' 结尾的字符串
  *
- * @note 当前支持的命令包括：
- *       1. START
- *       2. STOP
- *       3. ZEROIMU
- *       4. TASK=任务号
- *       5. POINT=x,y
- *       6. REGION=区域号
- *       7. ROUTE=a,b,c,d...
- *       8. PASS=a,b,c,d...
- *       9. ROUND=a,b
+ * @note 当前支持的命令有：
+ *       START
+ *       STOP
+ *       ZEROIMU
+ *       TASK=n
+ *       POINT=n      （n 为 1~9 的区域号）
+ *       REGION=n     （兼容别名，同样是 1~9 的区域号）
+ *       ROUTE=a,b,c,...
+ *       PASS=a,b,c,...
+ *       ROUND=a,b
  *
  *       解析成功后，会把结果写入 g_screen，
  *       并刷新 update_ms 时间戳。
@@ -113,7 +113,6 @@ static void ProtocolScreen_ParseLine(char *line)
 {
     unsigned int t = 0U;                 // 临时任务号变量
     unsigned int rid = 0U;               // 临时区域号变量
-    float x = 0.0f, y = 0.0f;            // 临时目标点坐标
     uint8_t temp_route[USER_ROUTE_MAX_LEN]; // 临时路径数组
     uint8_t len = 0U;                    // 临时路径长度
 
@@ -138,32 +137,37 @@ static void ProtocolScreen_ParseLine(char *line)
         g_screen.imu_zero_cmd = 1U;
         g_screen.update_ms = g_sys_ms;
     }
-    /* -------------------- TASK=xx -------------------- */
+    /* -------------------- TASK=n -------------------- */
     /* 设置简单任务号，例如去中心、激光追踪等 */
     else if (sscanf(line, "TASK=%u", &t) == 1)
     {
         g_screen.task_id = (uint8_t)t;
         g_screen.update_ms = g_sys_ms;
     }
-    /* -------------------- POINT=x,y -------------------- */
-    /* 设置一个直接目标点坐标 */
-    else if (sscanf(line, "POINT=%f,%f", &x, &y) == 2)
+    /* -------------------- POINT=n -------------------- */
+    /* 当前版本里 POINT=n 表示“目标区域编号”，不再是坐标 */
+    else if (sscanf(line, "POINT=%u", &rid) == 1)
     {
-        g_screen.point_x_mm = x;
-        g_screen.point_y_mm = y;
-        g_screen.point_valid = 1U;
-        g_screen.update_ms = g_sys_ms;
+        if (rid >= 1U && rid <= 9U)
+        {
+            g_screen.point_region_id = (uint8_t)rid;
+            g_screen.point_valid = 1U;
+            g_screen.update_ms = g_sys_ms;
+        }
     }
     /* -------------------- REGION=n -------------------- */
-    /* 设置一个直接目标区域 */
+    /* 保留 REGION=n 作为兼容写法，本质同样是区域号 1~9 */
     else if (sscanf(line, "REGION=%u", &rid) == 1)
     {
-        g_screen.region_id = (uint8_t)rid;
-        g_screen.region_valid = 1U;
-        g_screen.update_ms = g_sys_ms;
+        if (rid >= 1U && rid <= 9U)
+        {
+            g_screen.region_id = (uint8_t)rid;
+            g_screen.region_valid = 1U;
+            g_screen.update_ms = g_sys_ms;
+        }
     }
     /* -------------------- ROUTE=a,b,c,... -------------------- */
-    /* 构建一个“逐点停留”的路径任务 */
+    /* 逐点停留模式路径任务 */
     else if (strncmp(line, "ROUTE=", 6) == 0)
     {
         memset(temp_route, 0, sizeof(temp_route));
@@ -174,12 +178,12 @@ static void ProtocolScreen_ParseLine(char *line)
             memcpy(g_screen.route, temp_route, len); // 保存路径点
             g_screen.route_len = len;                // 保存路径长度
             g_screen.route_pass_mode = 0U;           // 0=逐点停留模式
-            g_screen.route_valid = 1U;               // 标记这是一条新路径命令
+            g_screen.route_valid = 1U;               // 标记新路径命令有效
             g_screen.update_ms = g_sys_ms;
         }
     }
     /* -------------------- PASS=a,b,c,... -------------------- */
-    /* 构建一个“中间经过不停留，终点停下”的路径任务 */
+    /* 中间经过不停留、终点停下模式 */
     else if (strncmp(line, "PASS=", 5) == 0)
     {
         memset(temp_route, 0, sizeof(temp_route));
@@ -189,8 +193,8 @@ static void ProtocolScreen_ParseLine(char *line)
         {
             memcpy(g_screen.route, temp_route, len); // 保存路径点
             g_screen.route_len = len;                // 保存路径长度
-            g_screen.route_pass_mode = 1U;           // 1=中间只经过模式
-            g_screen.route_valid = 1U;               // 标记这是一条新路径命令
+            g_screen.route_pass_mode = 1U;           // 1=经过不停留模式
+            g_screen.route_valid = 1U;               // 标记新路径命令有效
             g_screen.update_ms = g_sys_ms;
         }
     }
@@ -202,10 +206,13 @@ static void ProtocolScreen_ParseLine(char *line)
 
         if (sscanf(line, "ROUND=%u,%u", &a, &b) == 2)
         {
-            g_screen.roundtrip_a = (uint8_t)a;
-            g_screen.roundtrip_b = (uint8_t)b;
-            g_screen.roundtrip_valid = 1U;
-            g_screen.update_ms = g_sys_ms;
+            if (a >= 1U && a <= 9U && b >= 1U && b <= 9U)
+            {
+                g_screen.roundtrip_a = (uint8_t)a;
+                g_screen.roundtrip_b = (uint8_t)b;
+                g_screen.roundtrip_valid = 1U;
+                g_screen.update_ms = g_sys_ms;
+            }
         }
     }
 }
@@ -220,9 +227,9 @@ static void ProtocolScreen_ParseLine(char *line)
  */
 void ProtocolScreen_Init(void)
 {
-    memset(&g_screen, 0, sizeof(g_screen)); // 清空解析结果结构体
-    memset(g_line, 0, sizeof(g_line));      // 清空当前命令行缓冲区
-    g_idx = 0U;                             // 重置接收索引
+    memset(&g_screen, 0, sizeof(g_screen));
+    memset(g_line, 0, sizeof(g_line));
+    g_idx = 0U;
 }
 
 /**
@@ -253,12 +260,12 @@ void ProtocolScreen_RxByte(uint8_t byte)
         return;
     }
 
-    /* 遇到换行符，说明当前一行命令已经接收完成 */
+    /* 遇到换行符，表示一整行命令接收完成 */
     if (byte == '\n')
     {
-        g_line[g_idx] = '\0';           // 补上字符串结束符
+        g_line[g_idx] = '\0';             // 补上字符串结束符
         ProtocolScreen_ParseLine(g_line); // 解析这一整行命令
-        g_idx = 0U;                     // 准备接收下一行
+        g_idx = 0U;                       // 准备接收下一行
         return;
     }
 
@@ -269,7 +276,7 @@ void ProtocolScreen_RxByte(uint8_t byte)
     }
     else
     {
-        /* 如果缓冲区写满，则直接丢弃这一行剩余内容并重新开始 */
+        /* 如果缓冲区写满，则丢弃这一行剩余内容并重新开始 */
         g_idx = 0U;
     }
 }
@@ -278,8 +285,8 @@ void ProtocolScreen_RxByte(uint8_t byte)
  * @brief 发送字符串到串口屏
  * @param text 要发送的字符串指针
  *
- * @note 当前这个版本使用 USART2 发送，
- *       与你当前工程的 usart.c 中“USART2 对接串口屏”保持一致。
+ * @note 当前通过 USART2 发送，
+ *       与你当前工程的 usart.c 中“USART2 对接串口屏”一致。
  */
 void ProtocolScreen_SendText(const char *text)
 {
@@ -288,7 +295,6 @@ void ProtocolScreen_SendText(const char *text)
         return;
     }
 
-    /* 通过 USART2 阻塞发送字符串 */
     HAL_UART_Transmit(&huart2, (uint8_t *)text, (uint16_t)strlen(text), 50U);
 }
 
@@ -303,9 +309,6 @@ void ProtocolScreen_SendText(const char *text)
  *       - 运行/完成/失败状态：RUN / FIN / FAIL
  *       - 当前保持时间：HOLD
  *       - 当前任务总运行时间：TIME
- *
- *       示例格式：
- *       STAT,X=100.0,Y=200.0,TX=300.0,TY=300.0,REG=5,TASK=1,RUN=1,FIN=0,FAIL=0,HOLD=1200,TIME=4500
  */
 void ProtocolScreen_SendStatus(void)
 {
@@ -319,7 +322,7 @@ void ProtocolScreen_SendStatus(void)
     /* 根据当前球坐标判断它位于哪个区域 */
     region_now = Region_FindCurrent(g_sys.ball.x_mm, g_sys.ball.y_mm);
 
-    /* 格式化生成状态字符串 */
+    /* 组装状态字符串 */
     snprintf(buf, sizeof(buf),
              "STAT,"
              "X=%.1f,Y=%.1f,"
