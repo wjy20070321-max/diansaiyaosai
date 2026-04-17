@@ -45,9 +45,6 @@ volatile uint32_t dbg_pi_laser_tick_ms = 0U;
 /* 外部声明的系统毫秒计时器 */
 extern volatile uint32_t g_sys_ms;
 
-/**
- * @brief 控制器管理模块初始化函数
- */
 void ControllerMgr_Init(void)
 {
     memset(&g_sys, 0, sizeof(g_sys));
@@ -56,10 +53,6 @@ void ControllerMgr_Init(void)
     g_sys.ref.mode = CTRL_MODE_HOLD;
 }
 
-/**
- * @brief 更新系统输入数据
- * @details 连续状态用 CopyData，一次性命令用原子 Consume
- */
 void ControllerMgr_UpdateInputs(void)
 {
     PiRxData_t pi;
@@ -70,15 +63,16 @@ void ControllerMgr_UpdateInputs(void)
     uint8_t start_cmd = 0U;
     uint8_t stop_cmd = 0U;
     uint8_t route_a = 0U, route_b = 0U, route_c = 0U, route_d = 0U;
-    float target_x_dummy = 0.0f;
-    float target_y_dummy = 0.0f;
+    float target_x = 0.0f;
+    float target_y = 0.0f;
+    uint8_t pi_route[4];
+    uint8_t pi_route_len = 0U;
     TaskContext_t *ctx;
 
-    /* 连续状态：安全快照 */
     ProtocolPi_CopyData(&pi);
     JY61P_CopyData(&imu);
 
-    /* ======== 先镜像树莓派原始快照，方便判断“到底收到没收到” ======== */
+    /* ======== 原始树莓派快照 ======== */
     dbg_pi_ball_x_mm = pi.ball_x_mm;
     dbg_pi_ball_y_mm = pi.ball_y_mm;
     dbg_pi_ball_vx_mmps = pi.ball_vx_mmps;
@@ -91,26 +85,43 @@ void ControllerMgr_UpdateInputs(void)
     dbg_pi_laser_valid = pi.laser_valid;
     dbg_pi_laser_tick_ms = pi.laser_update_ms;
 
-    /* 更新小球位置和速度数据 */
+    /* ======== 连续状态写入系统 ======== */
     g_sys.ball.x_mm = pi.ball_x_mm;
     g_sys.ball.y_mm = pi.ball_y_mm;
     g_sys.ball.vx_mmps = pi.ball_vx_mmps;
     g_sys.ball.vy_mmps = pi.ball_vy_mmps;
     g_sys.ball.valid = pi.ball_valid;
-    g_sys.ball.tick_ms = pi.ball_update_ms;   /* 只看球状态帧时间戳 */
+    g_sys.ball.tick_ms = pi.ball_update_ms;
 
-    /* 更新IMU数据 */
     g_sys.imu = imu;
 
-    /* 一次性命令：原子取出并清空，避免比赛时出现丢命令/重复命令 */
+    /* ======== 树莓派命令：路线 ======== */
     if (ProtocolPi_ConsumeRoute(&route_a, &route_b, &route_c, &route_d))
     {
-        TaskMgr_SetUserRoute(route_a, route_b, route_c, route_d);
+        pi_route_len = 0U;
+        if (route_a >= 1U && route_a <= 9U) pi_route[pi_route_len++] = route_a;
+        if (route_b >= 1U && route_b <= 9U) pi_route[pi_route_len++] = route_b;
+        if (route_c >= 1U && route_c <= 9U) pi_route[pi_route_len++] = route_c;
+        if (route_d >= 1U && route_d <= 9U) pi_route[pi_route_len++] = route_d;
+
+        if (pi_route_len > 0U)
+        {
+            TaskMgr_SetRouteSequence(pi_route, pi_route_len, 0U);
+            TaskMgr_Start();
+        }
     }
 
+    /* ======== 树莓派命令：直接目标点 ======== */
+    if (ProtocolPi_ConsumeTarget(&target_x, &target_y))
+    {
+        TaskMgr_SetDirectPoint(target_x, target_y);
+        TaskMgr_Start();
+    }
+
+    /* ======== 树莓派命令：任务控制 ======== */
     if (ProtocolPi_ConsumeTaskCtrl(&task_id, &start_cmd, &stop_cmd))
     {
-        if (task_id != TASK_ID_NONE)
+        if (task_id == TASK_ID_GOTO_CENTER || task_id == TASK_ID_TRACK_LASER)
         {
             TaskMgr_LoadTask(task_id);
         }
@@ -126,24 +137,48 @@ void ControllerMgr_UpdateInputs(void)
         }
     }
 
-    /* direct target 目前还没接入任务层，先消费掉，避免一直悬挂 */
-    (void)ProtocolPi_ConsumeTarget(&target_x_dummy, &target_y_dummy);
+    /* ======== 串口屏命令：直接坐标 ======== */
+    if (screen->point_valid)
+    {
+        TaskMgr_SetDirectPoint(screen->point_x_mm, screen->point_y_mm);
+        TaskMgr_Start();
+        screen->point_valid = 0U;
+    }
 
-    /* 处理屏幕发送的路线数据 */
+    /* ======== 串口屏命令：指定区域 ======== */
+    if (screen->region_valid)
+    {
+        TaskMgr_SetDirectRegion(screen->region_id);
+        TaskMgr_Start();
+        screen->region_valid = 0U;
+    }
+
+    /* ======== 串口屏命令：区域序列 ======== */
     if (screen->route_valid)
     {
-        TaskMgr_SetUserRoute(screen->route_a, screen->route_b, screen->route_c, screen->route_d);
+        TaskMgr_SetRouteSequence(screen->route, screen->route_len, screen->route_pass_mode);
+        TaskMgr_Start();
         screen->route_valid = 0U;
     }
 
-    /* 处理屏幕发送的任务ID */
+    /* ======== 串口屏命令：两点往返（默认2次循环） ======== */
+    if (screen->roundtrip_valid)
+    {
+        TaskMgr_SetRoundTrip(screen->roundtrip_a, screen->roundtrip_b, 2U);
+        TaskMgr_Start();
+        screen->roundtrip_valid = 0U;
+    }
+
+    /* ======== 串口屏命令：简单任务（中心 / 激光） ======== */
     if (screen->task_id != TASK_ID_NONE)
     {
-        TaskMgr_LoadTask(screen->task_id);
+        if (screen->task_id == TASK_ID_GOTO_CENTER || screen->task_id == TASK_ID_TRACK_LASER)
+        {
+            TaskMgr_LoadTask(screen->task_id);
+        }
         screen->task_id = TASK_ID_NONE;
     }
 
-    /* 处理屏幕启动/停止命令 */
     if (screen->start_cmd)
     {
         TaskMgr_Start();
@@ -156,22 +191,21 @@ void ControllerMgr_UpdateInputs(void)
         screen->stop_cmd = 0U;
     }
 
-    /* 处理IMU校零命令 */
     if (screen->imu_zero_cmd)
     {
         JY61P_SetZero();
         screen->imu_zero_cmd = 0U;
     }
 
-    /* ======== 最后再镜像“已经写进系统后的值” ======== */
+    /* ======== 调试镜像 ======== */
     ctx = TaskMgr_GetContext();
 
     dbg_task_id = ctx->task_id;
     dbg_task_running = ctx->running;
-    dbg_route0 = ctx->user_route[0];
-    dbg_route1 = ctx->user_route[1];
-    dbg_route2 = ctx->user_route[2];
-    dbg_route3 = ctx->user_route[3];
+    dbg_route0 = ctx->route_region[0];
+    dbg_route1 = ctx->route_region[1];
+    dbg_route2 = ctx->route_region[2];
+    dbg_route3 = ctx->route_region[3];
 
     dbg_ball_x_mm = g_sys.ball.x_mm;
     dbg_ball_y_mm = g_sys.ball.y_mm;
@@ -183,9 +217,6 @@ void ControllerMgr_UpdateInputs(void)
     dbg_ctrl_mode = g_sys.ref.mode;
 }
 
-/**
- * @brief 10ms控制周期执行函数
- */
 void ControllerMgr_Run10ms(void)
 {
     BallOuterOutput_t outer;
@@ -199,7 +230,6 @@ void ControllerMgr_Run10ms(void)
         g_sys.ref.mode = CTRL_MODE_HOLD;
     }
 
-    /* 每次 10ms 目标更新后，也同步到调试量 */
     dbg_target_x_mm = g_sys.ref.target_x_mm;
     dbg_target_y_mm = g_sys.ref.target_y_mm;
     dbg_ctrl_mode = g_sys.ref.mode;
@@ -229,9 +259,6 @@ void ControllerMgr_Run10ms(void)
     }
 }
 
-/**
- * @brief 5ms控制周期执行函数
- */
 void ControllerMgr_Run5ms(void)
 {
     PlateInnerOutput_t inner;
@@ -242,7 +269,6 @@ void ControllerMgr_Run5ms(void)
         return;
     }
 
-    /* 只依据 ball_update_ms 判断球数据是否过期 */
     if (SafetyMgr_CheckPiTimeout(g_sys_ms, g_sys.ball.tick_ms) && g_sys.ball.valid)
     {
         g_sys.ball.valid = 0U;

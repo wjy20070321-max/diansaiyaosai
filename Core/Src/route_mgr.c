@@ -1,112 +1,329 @@
-#include "route_mgr.h"  // 路线管理模块头文件
-#include "region.h"      // 区域管理模块
+#include "task_mgr.h"
+#include "region.h"
+#include "protocol_pi.h"
+
+/* 外部声明的系统毫秒计时器 */
+extern volatile uint32_t g_sys_ms;
 
 /**
- * @brief 向路线步骤数组中添加一个步骤
- * @param steps 路线步骤数组指针
- * @param max_steps 最大允许步骤数
- * @param count 当前已添加步骤计数指针
- * @param x 目标X坐标（毫米）
- * @param y 目标Y坐标（毫米）
- * @param mode 控制模式（如快速移动、制动等）
- * @param need_hold 是否需要保持位置
- * @param hold_ms 保持时间（毫秒）
- * @param timeout_ms 步骤超时时间（毫秒）
- * @param is_region_target 是否为区域目标
- * @param region_id 区域ID（1-9）
- * @return 1表示添加成功，0表示添加失败（超出最大步骤数）
+ * @brief 任务上下文结构体实例
  */
-static uint8_t PushStep(RouteStep_t *steps, uint8_t max_steps, uint8_t *count,
-                        float x, float y, uint8_t mode,
-                        uint8_t need_hold, uint16_t hold_ms, uint16_t timeout_ms,
-                        uint8_t is_region_target, uint8_t region_id)
+static TaskContext_t g_task;
+
+static void TaskMgr_ResetRuntime(void)
 {
-    if (*count >= max_steps) return 0U;
-    steps[*count].x_mm = x;
-    steps[*count].y_mm = y;
-    steps[*count].mode = mode;
-    steps[*count].need_hold = need_hold;
-    steps[*count].hold_ms = hold_ms;
-    steps[*count].timeout_ms = timeout_ms;
-    steps[*count].is_region_target = is_region_target;
-    steps[*count].region_id = region_id;
-    (*count)++;
-    return 1U;
+    g_task.running = 0U;
+    g_task.finished = 0U;
+    g_task.failed = 0U;
+    g_task.current_step = 0U;
+    g_task.total_steps = 0U;
+    g_task.total_time_ms = 0U;
+    g_task.step_time_ms = 0U;
+    g_task.hold_count_ms = 0U;
+    memset(g_task.steps, 0, sizeof(g_task.steps));
+}
+
+void TaskMgr_Init(void)
+{
+    memset(&g_task, 0, sizeof(g_task));
+    g_task.route_region[0] = 1U;
+    g_task.route_region[1] = 5U;
+    g_task.route_region[2] = 9U;
+    g_task.route_len = 3U;
+}
+
+TaskContext_t* TaskMgr_GetContext(void)
+{
+    return &g_task;
 }
 
 /**
- * @brief 根据任务ID构建任务路线
- * @param task_id 任务ID
- * @param user_route 用户自定义路线数组（用于USER_ABCD任务）
- * @param steps 路线步骤数组指针
- * @param max_steps 最大允许步骤数
- * @return 构建的步骤数量
- * 
- * @note 支持的任务类型：
- *       1. TASK_ID_HOLD_2 - 在区域2保持
- *       2. TASK_ID_1_TO_5 - 从区域1到区域5
- *       3. TASK_ID_1_TO_4_TO_5 - 从区域1到区域4再到区域5
- *       4. TASK_ID_1_TO_9 - 从区域1到区域9（绕开中间区域）
- *       5. TASK_ID_1_2_6_9 - 从区域1到区域2到区域6再到区域9
- *       6. TASK_ID_USER_ABCD - 用户自定义路线（A->B->C->D）
+ * @brief 加载简单任务
+ * @note 这里只保留：
+ *       1) 去中心区
+ *       2) 激光追踪
  */
-uint8_t RouteMgr_BuildTask(uint8_t task_id, const uint8_t *user_route,
-                           RouteStep_t *steps, uint8_t max_steps)
+void TaskMgr_LoadTask(uint8_t task_id)
 {
-    uint8_t cnt = 0U;
-    Point2f_t c;
+    TaskMgr_ResetRuntime();
+    g_task.task_id = task_id;
 
-    // 根据任务ID构建不同的路线
-    if (task_id == TASK_ID_HOLD_2)
+    if (task_id == TASK_ID_GOTO_CENTER)
     {
-        // 任务1：在区域2保持
-        c = Region_GetCenter(2);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_HOLD, 1U, 5000U, 10000U, 1U, 2U);
+        g_task.current_region_cmd = 5U;
     }
-    else if (task_id == TASK_ID_1_TO_5)
+    else if (task_id == TASK_ID_TRACK_LASER)
     {
-        // 任务2：从区域1到区域5
-        c = Region_GetCenter(5);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_HOLD, 1U, 2000U, 15000U, 1U, 5U);
+        /* 纯模式切换，目标由激光帧实时给 */
     }
-    else if (task_id == TASK_ID_1_TO_4_TO_5)
+}
+
+void TaskMgr_SetDirectPoint(float x_mm, float y_mm)
+{
+    TaskMgr_ResetRuntime();
+    g_task.task_id = TASK_ID_GOTO_POINT;
+    g_task.point_x_mm = Limitf(x_mm, 0.0f, BOARD_SIZE_MM);
+    g_task.point_y_mm = Limitf(y_mm, 0.0f, BOARD_SIZE_MM);
+}
+
+void TaskMgr_SetDirectRegion(uint8_t region_id)
+{
+    TaskMgr_ResetRuntime();
+    g_task.task_id = TASK_ID_GOTO_REGION;
+    g_task.current_region_cmd = region_id;
+}
+
+void TaskMgr_SetRouteSequence(const uint8_t *route, uint8_t len, uint8_t pass_mode)
+{
+    TaskMgr_ResetRuntime();
+
+    if (route == NULL || len == 0U)
     {
-        // 任务3：从区域1到区域4再到区域5
-        c = Region_GetCenter(4);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_HOLD, 1U, 2000U, 10000U, 1U, 4U);
-        c = Region_GetCenter(5);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_HOLD, 1U, 2000U, 10000U, 1U, 5U);
-    }
-    else if (task_id == TASK_ID_1_TO_9)
-    {
-        // 任务4：从区域1到区域9（绕开中间区域）
-        /* 用边缘安全路径绕开中间区域 */
-        PushStep(steps, max_steps, &cnt, 125.0f, 580.0f, CTRL_MODE_FAST, 0U, 0U, 5000U, 0U, 0U);
-        PushStep(steps, max_steps, &cnt, 580.0f, 580.0f, CTRL_MODE_FAST, 0U, 0U, 7000U, 0U, 0U);
-        PushStep(steps, max_steps, &cnt, 580.0f, 125.0f, CTRL_MODE_BRAKE, 0U, 0U, 7000U, 0U, 0U);
-        c = Region_GetCenter(9);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_HOLD, 1U, 2000U, 10000U, 1U, 9U);
-    }
-    else if (task_id == TASK_ID_1_2_6_9)
-    {
-        // 任务5：从区域1到区域2到区域6再到区域9
-        c = Region_GetCenter(2);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_BRAKE, 0U, 0U, 10000U, 1U, 2U);
-        c = Region_GetCenter(6);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_BRAKE, 0U, 0U, 12000U, 1U, 6U);
-        c = Region_GetCenter(9);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_HOLD, 1U, 2000U, 18000U, 1U, 9U);
-    }
-    else if (task_id == TASK_ID_USER_ABCD)
-    {
-        // 任务6：用户自定义路线（A->B->C->D）
-        c = Region_GetCenter(user_route[1]);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_BRAKE, 0U, 0U, 12000U, 1U, user_route[1]);
-        c = Region_GetCenter(user_route[2]);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_BRAKE, 0U, 0U, 12000U, 1U, user_route[2]);
-        c = Region_GetCenter(user_route[3]);
-        PushStep(steps, max_steps, &cnt, c.x, c.y, CTRL_MODE_HOLD, 1U, 2000U, 16000U, 1U, user_route[3]);
+        g_task.task_id = TASK_ID_NONE;
+        return;
     }
 
-    return cnt;
+    if (len > USER_ROUTE_MAX_LEN)
+    {
+        len = USER_ROUTE_MAX_LEN;
+    }
+
+    memcpy(g_task.route_region, route, len);
+    g_task.route_len = len;
+    g_task.route_pass_mode = pass_mode ? 1U : 0U;
+
+    if (g_task.route_pass_mode)
+    {
+        g_task.task_id = TASK_ID_ROUTE_PASS;
+        g_task.total_steps = RouteMgr_BuildPassSequence(g_task.route_region,
+                                                        g_task.route_len,
+                                                        PASS_END_HOLD_MS,
+                                                        g_task.steps,
+                                                        TASK_MAX_STEPS);
+    }
+    else
+    {
+        g_task.task_id = TASK_ID_ROUTE_HOLD;
+        g_task.total_steps = RouteMgr_BuildRegionSequence(g_task.route_region,
+                                                          g_task.route_len,
+                                                          ROUTE_HOLD_MS,
+                                                          g_task.steps,
+                                                          TASK_MAX_STEPS);
+    }
+}
+
+void TaskMgr_SetRoundTrip(uint8_t a, uint8_t b, uint8_t cycles)
+{
+    TaskMgr_ResetRuntime();
+
+    g_task.task_id = TASK_ID_ROUND_TRIP;
+    g_task.roundtrip_a = a;
+    g_task.roundtrip_b = b;
+    g_task.roundtrip_cycles = cycles;
+
+    g_task.total_steps = RouteMgr_BuildRoundTrip(a, b, cycles,
+                                                 ROUNDTRIP_HOLD_MS,
+                                                 g_task.steps,
+                                                 TASK_MAX_STEPS);
+}
+
+void TaskMgr_Start(void)
+{
+    if (g_task.task_id == TASK_ID_TRACK_LASER ||
+        g_task.task_id == TASK_ID_GOTO_POINT ||
+        g_task.task_id == TASK_ID_GOTO_REGION ||
+        g_task.task_id == TASK_ID_GOTO_CENTER)
+    {
+        g_task.running = 1U;
+    }
+    else
+    {
+        g_task.running = (g_task.total_steps > 0U) ? 1U : 0U;
+    }
+
+    g_task.finished = 0U;
+    g_task.failed = 0U;
+    g_task.total_time_ms = 0U;
+    g_task.step_time_ms = 0U;
+    g_task.hold_count_ms = 0U;
+    g_task.current_step = 0U;
+}
+
+void TaskMgr_Stop(void)
+{
+    g_task.running = 0U;
+}
+
+uint8_t TaskMgr_IsRunning(void)
+{
+    return g_task.running;
+}
+
+uint8_t TaskMgr_IsFinished(void)
+{
+    return g_task.finished;
+}
+
+uint8_t TaskMgr_IsFailed(void)
+{
+    return g_task.failed;
+}
+
+void TaskMgr_GetTarget(float *x_mm, float *y_mm, uint8_t *mode)
+{
+    if (x_mm == NULL || y_mm == NULL || mode == NULL)
+    {
+        return;
+    }
+
+    if (g_task.running && g_task.task_id == TASK_ID_TRACK_LASER)
+    {
+        PiRxData_t pi_data;
+        uint8_t laser_fresh;
+
+        ProtocolPi_CopyData(&pi_data);
+        laser_fresh = ((g_sys_ms - pi_data.laser_update_ms) <= PI_UART_TIMEOUT_MS) ? 1U : 0U;
+
+        if (pi_data.laser_valid && laser_fresh)
+        {
+            *x_mm = pi_data.laser_x_mm;
+            *y_mm = pi_data.laser_y_mm;
+            *mode = CTRL_MODE_FAST;
+        }
+        else
+        {
+            *x_mm = BOARD_CENTER_X_MM;
+            *y_mm = BOARD_CENTER_Y_MM;
+            *mode = CTRL_MODE_HOLD;
+        }
+        return;
+    }
+
+    if (g_task.running && g_task.task_id == TASK_ID_GOTO_CENTER)
+    {
+        Point2f_t c = Region_GetCenter(5);
+        *x_mm = c.x;
+        *y_mm = c.y;
+        *mode = CTRL_MODE_HOLD;
+        return;
+    }
+
+    if (g_task.running && g_task.task_id == TASK_ID_GOTO_REGION)
+    {
+        Point2f_t c = Region_GetCenter(g_task.current_region_cmd);
+        *x_mm = c.x;
+        *y_mm = c.y;
+        *mode = CTRL_MODE_HOLD;
+        return;
+    }
+
+    if (g_task.running && g_task.task_id == TASK_ID_GOTO_POINT)
+    {
+        *x_mm = g_task.point_x_mm;
+        *y_mm = g_task.point_y_mm;
+        *mode = CTRL_MODE_HOLD;
+        return;
+    }
+
+    if (g_task.running && g_task.current_step < g_task.total_steps)
+    {
+        *x_mm = g_task.steps[g_task.current_step].x_mm;
+        *y_mm = g_task.steps[g_task.current_step].y_mm;
+        *mode = g_task.steps[g_task.current_step].mode;
+    }
+    else
+    {
+        *x_mm = BOARD_CENTER_X_MM;
+        *y_mm = BOARD_CENTER_Y_MM;
+        *mode = CTRL_MODE_HOLD;
+    }
+}
+
+void TaskMgr_Update1ms(float ball_x, float ball_y, uint8_t ball_valid)
+{
+    RouteStep_t *s;
+    uint8_t reached = 0U;
+
+    if (!g_task.running)
+    {
+        return;
+    }
+
+    /* 这些模式是持续目标模式，不走步骤状态机 */
+    if (g_task.task_id == TASK_ID_TRACK_LASER ||
+        g_task.task_id == TASK_ID_GOTO_POINT ||
+        g_task.task_id == TASK_ID_GOTO_REGION ||
+        g_task.task_id == TASK_ID_GOTO_CENTER)
+    {
+        g_task.total_time_ms++;
+        return;
+    }
+
+    if (g_task.current_step >= g_task.total_steps)
+    {
+        return;
+    }
+
+    s = &g_task.steps[g_task.current_step];
+    g_task.total_time_ms++;
+    g_task.step_time_ms++;
+
+    if (g_task.step_time_ms >= s->timeout_ms)
+    {
+        g_task.running = 0U;
+        g_task.failed = 1U;
+        return;
+    }
+
+    if (!ball_valid)
+    {
+        return;
+    }
+
+    if (s->is_region_target && s->region_id > 0U)
+    {
+        if (s->need_hold)
+        {
+            if (Region_IsHeld(s->region_id, ball_x, ball_y))
+            {
+                g_task.hold_count_ms++;
+                if (g_task.hold_count_ms >= s->hold_ms)
+                {
+                    reached = 1U;
+                }
+            }
+            else
+            {
+                g_task.hold_count_ms = 0U;
+            }
+        }
+        else if (Region_IsEntered(s->region_id, ball_x, ball_y))
+        {
+            reached = 1U;
+        }
+    }
+    else
+    {
+        float dx = ball_x - s->x_mm;
+        float dy = ball_y - s->y_mm;
+
+        if ((dx * dx + dy * dy) <= SQRF(20.0f))
+        {
+            reached = 1U;
+        }
+    }
+
+    if (reached)
+    {
+        g_task.current_step++;
+        g_task.step_time_ms = 0U;
+        g_task.hold_count_ms = 0U;
+
+        if (g_task.current_step >= g_task.total_steps)
+        {
+            g_task.running = 0U;
+            g_task.finished = 1U;
+        }
+        return;
+    }
 }
