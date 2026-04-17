@@ -198,12 +198,12 @@ extern "C" {
  * @brief X 轴舵机最大命令角（度）
  * @note  控制器下发到舵机的最大偏转量
  */
-#define SERVO_X_MAX_CMD_DEG             8.0f
+#define SERVO_X_MAX_CMD_DEG             90.0f
 
 /**
  * @brief Y 轴舵机最大命令角（度）
  */
-#define SERVO_Y_MAX_CMD_DEG             8.0f
+#define SERVO_Y_MAX_CMD_DEG             90.0f
 
 /**
  * @brief 舵机最大命令角统一值
