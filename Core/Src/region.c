@@ -22,19 +22,19 @@ static Point2f_t g_region[10];
 void Region_Init(void)
 {
     /* 第一行（靠上方） */
-    g_region[1] = (Point2f_t){  50.0f, 550.0f };
-    g_region[2] = (Point2f_t){ 300.0f, 550.0f };
-    g_region[3] = (Point2f_t){ 550.0f, 550.0f };
+    g_region[1] = (Point2f_t){  55.0f, 555.0f };
+    g_region[2] = (Point2f_t){ 305.0f, 555.0f };
+    g_region[3] = (Point2f_t){ 555.0f, 555.0f };
 
     /* 第二行（中间） */
-    g_region[4] = (Point2f_t){  50.0f, 300.0f };
-    g_region[5] = (Point2f_t){ 300.0f, 300.0f };
-    g_region[6] = (Point2f_t){ 550.0f, 300.0f };
+    g_region[4] = (Point2f_t){  55.0f, 305.0f };
+    g_region[5] = (Point2f_t){ 305.0f, 305.0f };
+    g_region[6] = (Point2f_t){ 555.0f, 305.0f };
 
     /* 第三行（靠下方） */
-    g_region[7] = (Point2f_t){  50.0f,  50.0f };
-    g_region[8] = (Point2f_t){ 300.0f,  50.0f };
-    g_region[9] = (Point2f_t){ 550.0f,  50.0f };
+    g_region[7] = (Point2f_t){  55.0f,  55.0f };
+    g_region[8] = (Point2f_t){ 305.0f,  55.0f };
+    g_region[9] = (Point2f_t){ 555.0f,  55.0f };
 }
 
 /**

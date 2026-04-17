@@ -181,9 +181,9 @@ extern "C" {
 
 /**
  * @brief 舵机工作中心角（度）
- * @note  以 90° 为中位
+ * @note  以 43° 为中位
  */
-#define SERVO_WORK_CENTER_DEG           90.0f
+#define SERVO_WORK_CENTER_DEG           43.0f
 
 /**
  * @brief X 轴舵机中心偏移（度）
@@ -202,7 +202,7 @@ extern "C" {
  *       - 90 -> 0   可走 90°
  *       因此负向安全范围保留到 -90°
  */
-#define SERVO_X_NEG_MAX_CMD_DEG         90.0f
+#define SERVO_X_NEG_MAX_CMD_DEG         6.0f
 
 /**
  * @brief X 轴舵机正向最大命令角（度）
@@ -210,19 +210,19 @@ extern "C" {
  *       - 90 -> 120 只可走 30°
  *       因此正向安全范围限制为 +30°
  */
-#define SERVO_X_POS_MAX_CMD_DEG         30.0f
+#define SERVO_X_POS_MAX_CMD_DEG         6.0f
 
 /**
  * @brief Y 轴舵机负向最大命令角（度）
  * @note  【新增】当前先按与你描述相同的机械边界处理
  */
-#define SERVO_Y_NEG_MAX_CMD_DEG         90.0f
+#define SERVO_Y_NEG_MAX_CMD_DEG         6.0f
 
 /**
  * @brief Y 轴舵机正向最大命令角（度）
  * @note  【新增】当前先按与你描述相同的机械边界处理
  */
-#define SERVO_Y_POS_MAX_CMD_DEG         30.0f
+#define SERVO_Y_POS_MAX_CMD_DEG         6.0f
 
 /**
  * @brief X 轴舵机最大命令角（度）

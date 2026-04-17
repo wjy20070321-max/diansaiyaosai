@@ -12,6 +12,11 @@
 /* g_sys 是整个控制系统的总状态仓库 */
 SystemContext_t g_sys;
 
+/* -------------------- 串口屏当前选中的任务号 -------------------- */
+/* 【新增】
+   用于支持“先发 TASK=n 选择任务，再发参数，最后 START 执行”的流程 */
+static uint8_t g_screen_selected_task_id = TASK_ID_NONE;
+
 /* ======== 调试镜像变量：任务层 ======== */
 /* 这些变量方便你在调试窗口里直接观察任务状态 */
 volatile uint8_t  dbg_task_id = 0U;         // 当前任务 ID
@@ -34,17 +39,17 @@ volatile uint8_t  dbg_ctrl_mode = 0U;       // 当前控制模式
 
 /* ======== 调试镜像变量：树莓派原始快照 ======== */
 /* 用来区分“树莓派发来的原始数据”和“系统当前采用的数据” */
-volatile float    dbg_pi_ball_x_mm = 0.0f;
-volatile float    dbg_pi_ball_y_mm = 0.0f;
-volatile float    dbg_pi_ball_vx_mmps = 0.0f;
-volatile float    dbg_pi_ball_vy_mmps = 0.0f;
-volatile uint8_t  dbg_pi_ball_valid = 0U;
-volatile uint32_t dbg_pi_ball_tick_ms = 0U;
+volatile float    dbg_pi_ball_x_mm = 0.0f;      // 树莓派发来的球 X 坐标
+volatile float    dbg_pi_ball_y_mm = 0.0f;      // 树莓派发来的球 Y 坐标
+volatile float    dbg_pi_ball_vx_mmps = 0.0f;   // 树莓派发来的球 X 速度
+volatile float    dbg_pi_ball_vy_mmps = 0.0f;   // 树莓派发来的球 Y 速度
+volatile uint8_t  dbg_pi_ball_valid = 0U;       // 树莓派发来的球有效标志
+volatile uint32_t dbg_pi_ball_tick_ms = 0U;     // 树莓派球数据更新时间
 
-volatile float    dbg_pi_laser_x_mm = 0.0f;
-volatile float    dbg_pi_laser_y_mm = 0.0f;
-volatile uint8_t  dbg_pi_laser_valid = 0U;
-volatile uint32_t dbg_pi_laser_tick_ms = 0U;
+volatile float    dbg_pi_laser_x_mm = 0.0f;     // 树莓派发来的激光 X 坐标
+volatile float    dbg_pi_laser_y_mm = 0.0f;     // 树莓派发来的激光 Y 坐标
+volatile uint8_t  dbg_pi_laser_valid = 0U;      // 树莓派发来的激光有效标志
+volatile uint32_t dbg_pi_laser_tick_ms = 0U;    // 树莓派激光数据更新时间
 
 /* -------------------- 外部系统毫秒计数 -------------------- */
 /* g_sys_ms 在 main.c 中定义，这里通过 extern 引用 */
@@ -60,10 +65,13 @@ extern volatile uint32_t g_sys_ms;
  */
 void ControllerMgr_Init(void)
 {
-    memset(&g_sys, 0, sizeof(g_sys));      // 清空系统上下文
-    g_sys.ref.target_x_mm = BOARD_CENTER_X_MM; // 默认目标 X = 板中心
-    g_sys.ref.target_y_mm = BOARD_CENTER_Y_MM; // 默认目标 Y = 板中心
-    g_sys.ref.mode = CTRL_MODE_HOLD;           // 默认进入保持模式
+    memset(&g_sys, 0, sizeof(g_sys));          // 清空整个系统上下文结构体
+    g_sys.ref.target_x_mm = BOARD_CENTER_X_MM; // 默认目标 X 设为板中心
+    g_sys.ref.target_y_mm = BOARD_CENTER_Y_MM; // 默认目标 Y 设为板中心
+    g_sys.ref.mode = CTRL_MODE_HOLD;           // 默认控制模式设为保持模式
+
+    /* 【新增】清空串口屏当前选中的任务号 */
+    g_screen_selected_task_id = TASK_ID_NONE;
 }
 
 /**
@@ -87,9 +95,9 @@ void ControllerMgr_UpdateInputs(void)
     ScreenRxData_t *screen = ProtocolScreen_GetData(); // 串口屏解析结果指针
 
     /* 树莓派一次性命令的临时变量 */
-    uint8_t task_id = TASK_ID_NONE;
-    uint8_t start_cmd = 0U;
-    uint8_t stop_cmd = 0U;
+    uint8_t task_id = TASK_ID_NONE;    // 树莓派下发的任务号
+    uint8_t start_cmd = 0U;            // 树莓派下发的启动命令
+    uint8_t stop_cmd = 0U;             // 树莓派下发的停止命令
 
     /* 树莓派路线命令的临时变量 */
     uint8_t route_a = 0U, route_b = 0U, route_c = 0U, route_d = 0U;
@@ -136,7 +144,7 @@ void ControllerMgr_UpdateInputs(void)
     /* 读取后会自动清空，避免重复执行 */
     if (ProtocolPi_ConsumeRoute(&route_a, &route_b, &route_c, &route_d))
     {
-        pi_route_len = 0U;
+        pi_route_len = 0U; // 先清零有效路径长度
 
         /* 只保留合法区域号 1~9 */
         if (route_a >= 1U && route_a <= 9U) pi_route[pi_route_len++] = route_a;
@@ -155,8 +163,8 @@ void ControllerMgr_UpdateInputs(void)
     /* ======== 树莓派命令：直接目标点 ======== */
     if (ProtocolPi_ConsumeTarget(&target_x, &target_y))
     {
-        TaskMgr_SetDirectPoint(target_x, target_y);
-        TaskMgr_Start();
+        TaskMgr_SetDirectPoint(target_x, target_y); // 设置直接目标点任务
+        TaskMgr_Start();                            // 立即启动
     }
 
     /* ======== 树莓派命令：任务控制 ======== */
@@ -165,86 +173,188 @@ void ControllerMgr_UpdateInputs(void)
         /* 当前只直接支持两类简单任务 */
         if (task_id == TASK_ID_GOTO_CENTER || task_id == TASK_ID_TRACK_LASER)
         {
-            TaskMgr_LoadTask(task_id);
+            TaskMgr_LoadTask(task_id); // 装载去中心或激光追踪任务
         }
 
         if (start_cmd)
         {
-            TaskMgr_Start();
+            TaskMgr_Start(); // 收到启动命令，启动当前任务
         }
 
         if (stop_cmd)
         {
-            TaskMgr_Stop();
+            TaskMgr_Stop();  // 收到停止命令，停止当前任务
         }
     }
 
-    /* ======== 串口屏命令：单点（区域 1~9） ======== */
-    /* POINT=n 现在表示区域号，而不是坐标 */
-    if (screen->point_valid)
-    {
-        TaskMgr_SetDirectRegion(screen->point_region_id);
-        TaskMgr_Start();
-        screen->point_valid = 0U; // 用完清零，防止重复执行
-    }
-
-    /* ======== 串口屏命令：指定区域 ======== */
-    if (screen->region_valid)
-    {
-        TaskMgr_SetDirectRegion(screen->region_id);
-        TaskMgr_Start();
-        screen->region_valid = 0U;
-    }
-
-    /* ======== 串口屏命令：区域序列 ======== */
-    if (screen->route_valid)
-    {
-        TaskMgr_SetRouteSequence(screen->route, screen->route_len, screen->route_pass_mode);
-        TaskMgr_Start();
-        screen->route_valid = 0U;
-    }
-
-    /* ======== 串口屏命令：两点往返（默认 2 次循环） ======== */
-    if (screen->roundtrip_valid)
-    {
-        TaskMgr_SetRoundTrip(screen->roundtrip_a, screen->roundtrip_b, 2U);
-        TaskMgr_Start();
-        screen->roundtrip_valid = 0U;
-    }
-
-    /* ======== 串口屏命令：简单任务（中心 / 激光） ======== */
+    /* ======== 串口屏任务号选择 ======== */
+    /* 【修改】
+       以前这里只直接支持 TASK=1（去中心）和 TASK=7（激光追踪）。
+       现在改成：先记录串口屏当前选中的任务号，
+       后续再结合 REGION / POINT / ROUTE / ROUND / PASS 和 START 来执行。 */
     if (screen->task_id != TASK_ID_NONE)
     {
-        if (screen->task_id == TASK_ID_GOTO_CENTER || screen->task_id == TASK_ID_TRACK_LASER)
+        g_screen_selected_task_id = screen->task_id; // 记录当前选中的任务号
+
+        /* 这两类任务不依赖额外参数，可以直接先装载 */
+        if (g_screen_selected_task_id == TASK_ID_GOTO_CENTER ||
+            g_screen_selected_task_id == TASK_ID_TRACK_LASER)
         {
-            TaskMgr_LoadTask(screen->task_id);
+            TaskMgr_LoadTask(g_screen_selected_task_id);
         }
+
         screen->task_id = TASK_ID_NONE; // 命令消费后清零
+    }
+
+    /* ======== 串口屏命令：如果没有先选 TASK，就保持原来的“直接执行”行为 ======== */
+    if (g_screen_selected_task_id == TASK_ID_NONE)
+    {
+        /* ======== 串口屏命令：单点（区域 1~9） ======== */
+        /* POINT=n 现在表示区域号，而不是坐标 */
+        if (screen->point_valid)
+        {
+            TaskMgr_SetDirectRegion(screen->point_region_id); // 直接去指定区域
+            TaskMgr_Start();                                  // 立即启动
+            screen->point_valid = 0U;                         // 用完清零，防止重复执行
+        }
+
+        /* ======== 串口屏命令：指定区域 ======== */
+        if (screen->region_valid)
+        {
+            TaskMgr_SetDirectRegion(screen->region_id); // 直接去指定区域
+            TaskMgr_Start();                            // 立即启动
+            screen->region_valid = 0U;                 // 命令清零
+        }
+
+        /* ======== 串口屏命令：区域序列 ======== */
+        if (screen->route_valid)
+        {
+            TaskMgr_SetRouteSequence(screen->route, screen->route_len, screen->route_pass_mode);
+            TaskMgr_Start();            // 直接启动路径任务
+            screen->route_valid = 0U;   // 命令清零
+        }
+
+        /* ======== 串口屏命令：两点往返（默认 2 次循环） ======== */
+        if (screen->roundtrip_valid)
+        {
+            TaskMgr_SetRoundTrip(screen->roundtrip_a, screen->roundtrip_b, 2U);
+            TaskMgr_Start();                // 直接启动往返任务
+            screen->roundtrip_valid = 0U;   // 命令清零
+        }
+    }
+    else
+    {
+        /* ======== 串口屏命令：如果已经先选了 TASK，则先装载参数，不立即启动 ======== */
+        switch (g_screen_selected_task_id)
+        {
+            case TASK_ID_GOTO_CENTER:
+                /* 已在上面 LoadTask，这里不用额外参数 */
+                break;
+
+            case TASK_ID_GOTO_REGION:
+                /* 【修改】TASK=2：去指定区域，配合 REGION=n 或 POINT=n 使用 */
+                if (screen->region_valid)
+                {
+                    TaskMgr_SetDirectRegion(screen->region_id); // 装载指定区域
+                    screen->region_valid = 0U;                  // 参数消费后清零
+                }
+                else if (screen->point_valid)
+                {
+                    TaskMgr_SetDirectRegion(screen->point_region_id); // 用 POINT=n 也支持去区域
+                    screen->point_valid = 0U;
+                }
+                break;
+
+            case TASK_ID_GOTO_POINT:
+                /* 【修改】
+                   当前串口屏已经没有“坐标点输入”，POINT=n 也变成区域号了。
+                   所以这里临时把 TASK=3 也按“去指定区域”处理。
+                   以后如果你恢复 POINT=x,y，再把这里改回 TaskMgr_SetDirectPoint(x, y)。 */
+                if (screen->point_valid)
+                {
+                    TaskMgr_SetDirectRegion(screen->point_region_id);
+                    screen->point_valid = 0U;
+                }
+                else if (screen->region_valid)
+                {
+                    TaskMgr_SetDirectRegion(screen->region_id);
+                    screen->region_valid = 0U;
+                }
+                break;
+
+            case TASK_ID_ROUTE_HOLD:
+                /* 【修改】TASK=4：多区域顺序停留，配合 ROUTE=a,b,c... 使用 */
+                if (screen->route_valid)
+                {
+                    TaskMgr_SetRouteSequence(screen->route, screen->route_len, 0U); // 逐点停留模式
+                    screen->route_valid = 0U;                                        // 参数清零
+                }
+                break;
+
+            case TASK_ID_ROUND_TRIP:
+                /* 【修改】TASK=5：两点往返，配合 ROUND=a,b 使用 */
+                if (screen->roundtrip_valid)
+                {
+                    TaskMgr_SetRoundTrip(screen->roundtrip_a, screen->roundtrip_b, 2U); // 默认 2 次循环
+                    screen->roundtrip_valid = 0U;
+                }
+                break;
+
+            case TASK_ID_ROUTE_PASS:
+                /* 【修改】TASK=6：路径经过不停留，配合 ROUTE=a,b,c... 使用 */
+                if (screen->route_valid)
+                {
+                    TaskMgr_SetRouteSequence(screen->route, screen->route_len, 1U); // 中间经过不停留模式
+                    screen->route_valid = 0U;
+                }
+                break;
+
+            case TASK_ID_TRACK_LASER:
+                /* 已在上面 LoadTask，这里不用额外参数 */
+                break;
+
+            default:
+                /* 未知任务号，不做处理 */
+                break;
+        }
     }
 
     /* 串口屏启动命令 */
     if (screen->start_cmd)
     {
-        TaskMgr_Start();
-        screen->start_cmd = 0U;
+        TaskMgr_Start(); // 启动当前已经装载好的任务
+
+        /* 【新增】除了激光追踪和去中心这种持续任务，
+           其他“先选 TASK 再填参数再 START”的任务，启动后清掉当前选择 */
+        if (g_screen_selected_task_id != TASK_ID_GOTO_CENTER &&
+            g_screen_selected_task_id != TASK_ID_TRACK_LASER)
+        {
+            g_screen_selected_task_id = TASK_ID_NONE;
+        }
+
+        screen->start_cmd = 0U; // 命令消费后清零
     }
 
     /* 串口屏停止命令 */
     if (screen->stop_cmd)
     {
-        TaskMgr_Stop();
-        screen->stop_cmd = 0U;
+        TaskMgr_Stop(); // 停止当前任务
+
+        /* 【新增】停止时也把当前任务选择清掉 */
+        g_screen_selected_task_id = TASK_ID_NONE;
+
+        screen->stop_cmd = 0U; // 命令消费后清零
     }
 
     /* 串口屏 IMU 置零命令 */
     if (screen->imu_zero_cmd)
     {
-        JY61P_SetZero();
+        JY61P_SetZero();          // 把当前姿态设为零点
         screen->imu_zero_cmd = 0U;
     }
 
     /* ======== 调试镜像 ======== */
-    ctx = TaskMgr_GetContext();
+    ctx = TaskMgr_GetContext(); // 取当前任务上下文
 
     dbg_task_id = ctx->task_id;
     dbg_task_running = ctx->running;
