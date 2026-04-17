@@ -118,7 +118,7 @@ extern "C" {
 
 /**
  * @brief 伺服电机中位PWM脉宽（微秒）
- * @note  对应舵机中立位置
+ * @note  舵机电气中位，不一定等于机构有效中位
  */
 #define SERVO_PWM_MID_US                1500.0f
 
@@ -129,24 +129,37 @@ extern "C" {
 
 /**
  * @brief 舵机物理总角度（度）
- * @note  参考你旧项目同款舵机参数：270°
+ * @note  舵机本体仍然是 270°
  */
 #define SERVO_PHYS_TOTAL_DEG            270.0f
 
 /**
- * @brief 舵机物理中心角（度）
+ * @brief 舵机有效工作区最小角（度）
+ * @note  机构真正有效的单调区起点
  */
-#define SERVO_PHYS_CENTER_DEG           (SERVO_PHYS_TOTAL_DEG * 0.5f)
+#define SERVO_WORK_MIN_DEG              0.0f
+
+/**
+ * @brief 舵机有效工作区最大角（度）
+ * @note  超过这个角度机构会反向，因此不能再用
+ */
+#define SERVO_WORK_MAX_DEG              180.0f
+
+/**
+ * @brief 舵机有效工作区中心角（度）
+ * @note  当前机构按你的描述，90° 为有效中心
+ */
+#define SERVO_WORK_CENTER_DEG           90.0f
 
 /**
  * @brief X轴舵机安装补偿角（度）
- * @note  平台真正水平时，X轴舵机相对物理中心的偏置
+ * @note  平台真正水平时，X轴舵机相对有效中心角的偏置
  */
 #define SERVO_X_CENTER_OFFSET_DEG       0.0f
 
 /**
  * @brief Y轴舵机安装补偿角（度）
- * @note  平台真正水平时，Y轴舵机相对物理中心的偏置
+ * @note  平台真正水平时，Y轴舵机相对有效中心角的偏置
  */
 #define SERVO_Y_CENTER_OFFSET_DEG       0.0f
 
@@ -154,12 +167,12 @@ extern "C" {
  * @brief X轴舵机最大相对控制角（度）
  * @note  建议先保守一点，后面再按机构实测放宽
  */
-#define SERVO_X_MAX_CMD_DEG             10.0f
+#define SERVO_X_MAX_CMD_DEG             8.0f
 
 /**
  * @brief Y轴舵机最大相对控制角（度）
  */
-#define SERVO_Y_MAX_CMD_DEG             10.0f
+#define SERVO_Y_MAX_CMD_DEG             8.0f
 
 /**
  * @brief 兼容旧内环代码的统一舵机最大控制角（度）

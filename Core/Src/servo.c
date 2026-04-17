@@ -13,7 +13,7 @@ static uint32_t Servo_UsToCcr(float us)
 
 /**
  * @brief 将绝对舵机角度转换为脉宽
- * @param abs_deg 绝对舵机角度，范围 0 ~ SERVO_PHYS_TOTAL_DEG
+ * @param abs_deg 绝对舵机角度，按舵机物理总角度 270° 映射
  */
 static float Servo_AbsDegToUs(float abs_deg)
 {
@@ -25,16 +25,25 @@ static float Servo_AbsDegToUs(float abs_deg)
 
 /**
  * @brief 将“相对平台中心角”转换成“绝对舵机角”
- * @param rel_deg 相对平台水平中心的角度（可正可负）
+ * @param rel_deg 相对平台有效中心的角度（可正可负）
  * @param center_offset_deg 安装补偿角
  * @param max_cmd_deg 当前轴允许的最大相对控制角
+ *
+ * @note 最终绝对角会被限制在机构有效工作区 [SERVO_WORK_MIN_DEG, SERVO_WORK_MAX_DEG]
  */
 static float Servo_RelDegToAbsDeg(float rel_deg, float center_offset_deg, float max_cmd_deg)
 {
+    float abs_deg;
+
     rel_deg = Limitf(rel_deg, -max_cmd_deg, max_cmd_deg);
 
-    /* 中心点 = 物理中位 + 安装补偿 */
-    return SERVO_PHYS_CENTER_DEG + center_offset_deg + rel_deg;
+    /* 以机构有效中心角为中心，而不是舵机物理中点 135° */
+    abs_deg = SERVO_WORK_CENTER_DEG + center_offset_deg + rel_deg;
+
+    /* 关键：只允许落在 0~180°有效工作区内 */
+    abs_deg = Limitf(abs_deg, SERVO_WORK_MIN_DEG, SERVO_WORK_MAX_DEG);
+
+    return abs_deg;
 }
 
 /**
@@ -49,7 +58,7 @@ void Servo_Init(void)
 
 /**
  * @brief 设置X轴舵机角度
- * @param deg 相对平台水平中心的目标角度
+ * @param deg 相对平台有效中心的目标角度
  */
 void Servo_SetXDeg(float deg)
 {
@@ -70,7 +79,7 @@ void Servo_SetXDeg(float deg)
 
 /**
  * @brief 设置Y轴舵机角度
- * @param deg 相对平台水平中心的目标角度
+ * @param deg 相对平台有效中心的目标角度
  */
 void Servo_SetYDeg(float deg)
 {
@@ -100,7 +109,7 @@ void Servo_SetXYDeg(float x_deg, float y_deg)
 
 /**
  * @brief 舵机归中
- * @note 回到“安装补偿后的平台水平位”
+ * @note 回到“机构有效工作区中心位”，即 90°附近
  */
 void Servo_Center(void)
 {

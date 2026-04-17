@@ -28,7 +28,7 @@ void TaskMgr_Init(void)
 TaskContext_t* TaskMgr_GetContext(void)
 {
     return &g_task;
-}
+ }
 
 /**
  * @brief 设置用户自定义路线
