@@ -1,6 +1,6 @@
 /** ****************************************************************************
  * @file    ball_outer_loop.c
- * @brief   小球位置外环控制模块源文件（双轴 PID 版）
+ * @brief   小球位置外环控制模块源文件（双轴 PID 版，直连映射修正版）
  ******************************************************************************/
 
 #include "ball_outer_loop.h"
@@ -11,8 +11,8 @@
 /* 这里用 PID_t 来保存两个方向的位置环状态。
    注意：D 项不用 pid.c 里的误差微分，而是直接使用视觉速度做阻尼，
    这样更稳、更好调。 */
-static PID_t g_pid_x_pos;   // 球 X 方向位置环（最终输出平台 Y 轴目标倾角）
-static PID_t g_pid_y_pos;   // 球 Y 方向位置环（最终输出平台 X 轴目标倾角）
+static PID_t g_pid_x_pos;   // 球 X 方向位置环（最终输出平台 X 轴目标倾角）
+static PID_t g_pid_y_pos;   // 球 Y 方向位置环（最终输出平台 Y 轴目标倾角）
 
 /* -------------------- 外环 PID 参数 -------------------- */
 /* 调参建议：
@@ -111,9 +111,10 @@ void BallOuterLoop_Reset(void)
  *       2. 再减去一个与当前球速度成比例的阻尼项 D
  *       3. 最后按当前模式进行限幅
  *
- *       物理对应关系（交叉映射）：
- *       - 想控制球 X 方向运动，需要平台绕 Y 轴倾斜
- *       - 想控制球 Y 方向运动，需要平台绕 X 轴倾斜
+ *       【修正】
+ *       按当前机械定义直接映射：
+ *       - X轴（左右）位置误差 -> 平台 X 轴目标倾角
+ *       - Y轴（上下）位置误差 -> 平台 Y 轴目标倾角
  */
 void BallOuterLoop_Run(float x_ref, float y_ref,
                        float x_meas, float y_meas,
@@ -121,11 +122,11 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
                        uint8_t mode,
                        BallOuterOutput_t *out)
 {
-    float x_tilt_limit;     // 控制球 Y 方向时，对应平台 X 轴最大倾角
-    float y_tilt_limit;     // 控制球 X 方向时，对应平台 Y 轴最大倾角
+    float x_tilt_limit;     // 平台 X 轴最大倾角
+    float y_tilt_limit;     // 平台 Y 轴最大倾角
 
-    float theta_y_cmd_deg;  // 用来控制球 X 方向的倾角命令
-    float theta_x_cmd_deg;  // 用来控制球 Y 方向的倾角命令
+    float theta_x_cmd_deg;  // 控制球 X 方向的倾角命令
+    float theta_y_cmd_deg;  // 控制球 Y 方向的倾角命令
 
     /* 空指针保护 */
     if (out == NULL)
@@ -147,27 +148,26 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
         g_last_mode = mode;
     }
 
-    /* 根据当前模式决定最大倾角
-       注意这里仍保持交叉映射关系 */
-    y_tilt_limit = GetTiltLimitDeg(mode, x_meas - x_ref);
-    x_tilt_limit = GetTiltLimitDeg(mode, y_meas - y_ref);
+    /* 根据当前模式决定最大倾角 */
+    x_tilt_limit = GetTiltLimitDeg(mode, x_meas - x_ref);
+    y_tilt_limit = GetTiltLimitDeg(mode, y_meas - y_ref);
 
     /* 只有在有效控制模式下才输出角度 */
     if (mode == CTRL_MODE_FAST || mode == CTRL_MODE_HOLD || mode == CTRL_MODE_BRAKE)
     {
         /* -------------------- 球 X 方向：位置 PI + 速度阻尼 D -------------------- */
-        /* 位置环输出的是“平台 Y 轴应该倾多少角”，再减去速度阻尼项 */
-        theta_y_cmd_deg = PID_Run(&g_pid_x_pos, x_ref, x_meas, CONTROL_OUTER_DT_S)
+        /* 位置环输出的是“平台 X 轴应该倾多少角”，再减去速度阻尼项 */
+        theta_x_cmd_deg = PID_Run(&g_pid_x_pos, x_ref, x_meas, CONTROL_OUTER_DT_S)
                         - OUTER_X_KD_VEL * vx_meas;
 
         /* -------------------- 球 Y 方向：位置 PI + 速度阻尼 D -------------------- */
-        /* 位置环输出的是“平台 X 轴应该倾多少角”，再减去速度阻尼项 */
-        theta_x_cmd_deg = PID_Run(&g_pid_y_pos, y_ref, y_meas, CONTROL_OUTER_DT_S)
+        /* 位置环输出的是“平台 Y 轴应该倾多少角”，再减去速度阻尼项 */
+        theta_y_cmd_deg = PID_Run(&g_pid_y_pos, y_ref, y_meas, CONTROL_OUTER_DT_S)
                         - OUTER_Y_KD_VEL * vy_meas;
 
         /* 最终按当前模式允许的最大倾角限幅 */
-        out->theta_y_ref_deg = Limitf(theta_y_cmd_deg, -y_tilt_limit, y_tilt_limit);
         out->theta_x_ref_deg = Limitf(theta_x_cmd_deg, -x_tilt_limit, x_tilt_limit);
+        out->theta_y_ref_deg = Limitf(theta_y_cmd_deg, -y_tilt_limit, y_tilt_limit);
     }
     else
     {

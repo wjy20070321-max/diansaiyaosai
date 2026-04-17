@@ -12,11 +12,11 @@ static PID_t g_pid_theta_y;
    1. 先调 kp，让平台能明显跟随目标倾角
    2. 再调 kd_rate，减少发冲和抖动
    3. 最后只加一点点 ki，修正轻微静差 */
-#define INNER_X_KP          (1.20f)
+#define INNER_X_KP          (3.20f)
 #define INNER_X_KI          (0.020f)
 #define INNER_X_KD_RATE     (0.020f)
 
-#define INNER_Y_KP          (1.20f)
+#define INNER_Y_KP          (3.20f)
 #define INNER_Y_KI          (0.020f)
 #define INNER_Y_KD_RATE     (0.020f)
 
