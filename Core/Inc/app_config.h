@@ -220,22 +220,22 @@ extern "C" {
 /**
  * @brief X 轴舵机负向最大命令角（度）
  */
-#define SERVO_X_NEG_MAX_CMD_DEG         20.0f
+#define SERVO_X_NEG_MAX_CMD_DEG         10.0f
 
 /**
  * @brief X 轴舵机正向最大命令角（度）
  */
-#define SERVO_X_POS_MAX_CMD_DEG         20.0f
+#define SERVO_X_POS_MAX_CMD_DEG         10.0f
 
 /**
  * @brief Y 轴舵机负向最大命令角（度）
  */
-#define SERVO_Y_NEG_MAX_CMD_DEG         20.0f
+#define SERVO_Y_NEG_MAX_CMD_DEG         10.0f
 
 /**
  * @brief Y 轴舵机正向最大命令角（度）
  */
-#define SERVO_Y_POS_MAX_CMD_DEG         20.0f
+#define SERVO_Y_POS_MAX_CMD_DEG         10.0f
 
 /**
  * @brief X 轴舵机最大命令角（度）

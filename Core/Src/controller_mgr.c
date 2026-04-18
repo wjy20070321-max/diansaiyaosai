@@ -13,27 +13,29 @@
 SystemContext_t g_sys;
 
 /* -------------------- 串口屏当前选中的任务号 -------------------- */
-/* 【新增】
-   用于支持“先发 TASK=n 选择任务，再发参数，最后 START 执行”的流程 */
+/* 用于支持“先发 TASK=n 选择任务，再发参数，最后 START 执行”的流程 */
 static uint8_t g_screen_selected_task_id = TASK_ID_NONE;
 
 /* -------------------- 串口屏任务别名判断 -------------------- */
-/* 【新增】
-   按当前题目和你的串口屏约定：
+/* 按当前题目和你的串口屏约定：
    - TASK=1
    - TASK=2
    - TASK=4
-   都统一视为“去指定区域并停留”这一类任务。
-
-   也就是说，这三个任务号在串口屏协议层是别名，
-   最终在 MCU 内部统一映射成 TaskMgr_SetDirectRegion(...)。 */
+   都统一视为“去指定区域并停留”这一类任务。 */
 static uint8_t ScreenTask_IsRegionHoldAlias(uint8_t task_id)
 {
     if (task_id == TASK_ID_GOTO_CENTER) return 1U;  // 1
     if (task_id == TASK_ID_GOTO_REGION) return 1U;  // 2
-    if (task_id == TASK_ID_ROUTE_HOLD) return 1U;   // 4（协议层兼容当作区域保持任务）
+    if (task_id == TASK_ID_ROUTE_HOLD)  return 1U;  // 4（协议层兼容当作区域保持任务）
     return 0U;
 }
+
+/* -------------------- 到目标点距离分段阈值（毫米） -------------------- */
+/* 这次新增：
+   让外环根据“离目标点的距离”自动切换 FAST / BRAKE / HOLD，
+   这样球快到目标点时会提前减速，而不是冲到点附近再猛刹。 */
+#define TARGET_BRAKE_DIST_MM   120.0f   // 大于此距离：快速推进
+#define TARGET_HOLD_DIST_MM     50.0f   // 小于此距离：进入稳住
 
 /* ======== 调试镜像变量：任务层 ======== */
 /* 这些变量方便你在调试窗口里直接观察任务状态 */
@@ -42,7 +44,7 @@ volatile uint8_t  dbg_task_running = 0U;    // 当前任务是否在运行
 volatile uint8_t  dbg_route0 = 0U;          // 当前路径第 1 个点
 volatile uint8_t  dbg_route1 = 0U;          // 当前路径第 2 个点
 volatile uint8_t  dbg_route2 = 0U;          // 当前路径第 3 个点
-volatile uint8_t  dbg_route3 = 0U;  // 当前路径第 4 个点
+volatile uint8_t  dbg_route3 = 0U;          // 当前路径第 4 个点
 volatile uint32_t dbg_run10ms_exec_cnt = 0U;
 volatile float    dbg_outer_theta_x = 0.0f;
 volatile float    dbg_outer_theta_y = 0.0f;
@@ -58,6 +60,7 @@ volatile uint32_t dbg_ball_tick_ms = 0U;    // 当前球数据时间戳
 volatile float    dbg_target_x_mm = 0.0f;   // 当前目标 X 坐标
 volatile float    dbg_target_y_mm = 0.0f;   // 当前目标 Y 坐标
 volatile uint8_t  dbg_ctrl_mode = 0U;       // 当前控制模式
+volatile float    dbg_target_dist_mm = 0.0f; // 当前球到目标点的距离（毫米）
 
 /* ======== 调试镜像变量：树莓派原始快照 ======== */
 /* 用来区分“树莓派发来的原始数据”和“系统当前采用的数据” */
@@ -87,12 +90,12 @@ extern volatile uint32_t g_sys_ms;
  */
 void ControllerMgr_Init(void)
 {
-    memset(&g_sys, 0, sizeof(g_sys));      // 清空系统上下文
-    g_sys.ref.target_x_mm = BOARD_CENTER_X_MM; // 默认目标 X = 板中心
-    g_sys.ref.target_y_mm = BOARD_CENTER_Y_MM; // 默认目标 Y = 板中心
-    g_sys.ref.mode = CTRL_MODE_HOLD;           // 默认进入保持模式
+    memset(&g_sys, 0, sizeof(g_sys));           // 清空系统上下文
+    g_sys.ref.target_x_mm = BOARD_CENTER_X_MM;  // 默认目标 X = 板中心
+    g_sys.ref.target_y_mm = BOARD_CENTER_Y_MM;  // 默认目标 Y = 板中心
+    g_sys.ref.mode = CTRL_MODE_HOLD;            // 默认进入保持模式
 
-    /* 【新增】清空串口屏当前选中的任务号 */
+    /* 清空串口屏当前选中的任务号 */
     g_screen_selected_task_id = TASK_ID_NONE;
 }
 
@@ -210,14 +213,12 @@ void ControllerMgr_UpdateInputs(void)
     }
 
     /* ======== 串口屏任务号选择 ======== */
-    /* 【修改】
-       现在把串口屏侧 TASK=1 / TASK=2 / TASK=4
+    /* 现在把串口屏侧 TASK=1 / TASK=2 / TASK=4
        统一看作“去指定区域并停留”的同类任务。 */
     if (screen->task_id != TASK_ID_NONE)
     {
         if (ScreenTask_IsRegionHoldAlias(screen->task_id))
         {
-            /* 【修改】这三类任务在 MCU 内部统一映射成“去指定区域” */
             g_screen_selected_task_id = TASK_ID_GOTO_REGION;
         }
         else
@@ -276,8 +277,7 @@ void ControllerMgr_UpdateInputs(void)
         switch (g_screen_selected_task_id)
         {
             case TASK_ID_GOTO_REGION:
-                /* 【修改】
-                   串口屏侧 TASK=1 / 2 / 4 最终都会走到这里。
+                /* 串口屏侧 TASK=1 / 2 / 4 最终都会走到这里。
                    目标由 REGION=n 或 POINT=n 给出。 */
                 if (screen->region_valid)
                 {
@@ -348,7 +348,7 @@ void ControllerMgr_UpdateInputs(void)
     {
         TaskMgr_Start();
 
-        /* 【新增】激光追踪需要保持当前任务选择，其余启动后清掉 */
+        /* 激光追踪需要保持当前任务选择，其余启动后清掉 */
         if (g_screen_selected_task_id != TASK_ID_TRACK_LASER)
         {
             g_screen_selected_task_id = TASK_ID_NONE;
@@ -362,7 +362,7 @@ void ControllerMgr_UpdateInputs(void)
     {
         TaskMgr_Stop();
 
-        /* 【新增】停止时也把当前任务选择清掉 */
+        /* 停止时也把当前任务选择清掉 */
         g_screen_selected_task_id = TASK_ID_NONE;
 
         screen->stop_cmd = 0U;
@@ -402,13 +402,17 @@ void ControllerMgr_UpdateInputs(void)
  *       1. 从任务管理器取当前目标点
  *       2. 根据球当前状态运行外环控制器
  *       3. 计算平台目标倾角
+ *       4. 根据到目标点的距离，自动切换 FAST / BRAKE / HOLD
  */
 void ControllerMgr_Run10ms(void)
 {
-	dbg_run10ms_exec_cnt++;
-	dbg_ball_age_ms = g_sys_ms - g_sys.ball.tick_ms;
-	
-    BallOuterOutput_t outer; // 外环输出：平台目标倾角
+    BallOuterOutput_t outer;   // 外环输出：平台目标倾角
+    float dx;
+    float dy;
+    float dist2;
+
+    dbg_run10ms_exec_cnt++;
+    dbg_ball_age_ms = g_sys_ms - g_sys.ball.tick_ms;
 
     /* 先从任务管理器读取当前目标点和模式 */
     TaskMgr_GetTarget(&g_sys.ref.target_x_mm, &g_sys.ref.target_y_mm, &g_sys.ref.mode);
@@ -430,14 +434,43 @@ void ControllerMgr_Run10ms(void)
     if (!g_sys.ball.valid)
     {
         BallOuterLoop_Reset(); // 重置外环历史状态
+        dbg_target_dist_mm = 0.0f;
 
 #if BALL_LOST_SAFE_CENTER
         /* 如果配置了丢球安全回中，则把目标倾角清零 */
         g_sys.ref.theta_x_ref_deg = 0.0f;
         g_sys.ref.theta_y_ref_deg = 0.0f;
+        dbg_outer_theta_x = 0.0f;
+        dbg_outer_theta_y = 0.0f;
 #endif
         return;
     }
+
+    /* -------------------- 根据到目标点的距离，自动切换控制模式 -------------------- */
+    dx = g_sys.ref.target_x_mm - g_sys.ball.x_mm;
+    dy = g_sys.ref.target_y_mm - g_sys.ball.y_mm;
+    dist2 = dx * dx + dy * dy;
+
+    /* 仅用于调试观察距离大小，不参与控制 */
+    dbg_target_dist_mm = sqrtf(dist2);
+
+    /* 远距离：快速推进 */
+    if (dist2 > SQRF(TARGET_BRAKE_DIST_MM))
+    {
+        g_sys.ref.mode = CTRL_MODE_FAST;
+    }
+    /* 中距离：提前减速 */
+    else if (dist2 > SQRF(TARGET_HOLD_DIST_MM))
+    {
+        g_sys.ref.mode = CTRL_MODE_BRAKE;
+    }
+    /* 近距离：小角度稳住 */
+    else
+    {
+        g_sys.ref.mode = CTRL_MODE_HOLD;
+    }
+
+    dbg_ctrl_mode = g_sys.ref.mode;
 
     /* 运行外环，计算平台目标倾角 */
     BallOuterLoop_Run(g_sys.ref.target_x_mm, g_sys.ref.target_y_mm,
@@ -445,9 +478,9 @@ void ControllerMgr_Run10ms(void)
                       g_sys.ball.vx_mmps, g_sys.ball.vy_mmps,
                       g_sys.ref.mode, &outer);
 
-	dbg_outer_theta_x = outer.theta_x_ref_deg;
-	dbg_outer_theta_y = outer.theta_y_ref_deg;
-	
+    dbg_outer_theta_x = outer.theta_x_ref_deg;
+    dbg_outer_theta_y = outer.theta_y_ref_deg;
+
     /* 写回系统上下文 */
     g_sys.ref.theta_x_ref_deg = outer.theta_x_ref_deg;
     g_sys.ref.theta_y_ref_deg = outer.theta_y_ref_deg;
@@ -494,19 +527,13 @@ void ControllerMgr_Run5ms(void)
     }
 
     /* -------------------- 运行内环 -------------------- */
-    /* 【修改】
-       你当前实测关系是：
-       - 左边上 -> pitch 增加
-       - 下边上 -> roll 增加
-
-       所以平台坐标与 IMU 坐标系相差 90°：
+    /* 你当前实测关系是：
        - X轴（左右）应使用 pitch / gyro_y
-       - Y轴（上下）应使用 roll / gyro_x
-     */
+       - Y轴（上下）应使用 roll / gyro_x */
     PlateInnerLoop_Run(g_sys.ref.theta_x_ref_deg,
                        g_sys.ref.theta_y_ref_deg,
                        g_sys.imu.pitch_deg - g_sys.imu.pitch_zero,
-                       g_sys.imu.roll_deg - g_sys.imu.roll_zero,
+                       g_sys.imu.roll_deg  - g_sys.imu.roll_zero,
                        g_sys.imu.gyro_y_dps,
                        g_sys.imu.gyro_x_dps,
                        &inner);
