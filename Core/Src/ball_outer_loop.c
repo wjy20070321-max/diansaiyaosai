@@ -1,56 +1,72 @@
 /** ****************************************************************************
  * @file    ball_outer_loop.c
- * @brief   小球位置外环控制模块源文件（双轴 PID 版，直连映射修正版）
+ * @brief   小球位置外环控制模块源文件（路径进度加减速版）
+ *
+ * @note
+ * 这版外环不再只是“位置误差越大，倾角越大”，
+ * 而是按“当前在整段路径上的进度”来做速度规划：
+ *
+ * 1. 起点附近：目标速度较小，缓缓起步
+ * 2. 路径前半段：目标速度逐步升高
+ * 3. 路径后半段：目标速度逐步降低
+ * 4. 接近目标：目标速度趋近于 0
+ *
+ * 如果当前球速度已经比“此时应有的目标速度”更大，
+ * 控制器就会自动给反向倾角，提前减速。
  ******************************************************************************/
 
 #include "ball_outer_loop.h"
 #include "app_config.h"
 #include "pid.h"
+#include <math.h>
 
 /* -------------------- 外环 PID 控制器对象 -------------------- */
-/* 这里用 PID_t 来保存两个方向的位置环状态。
-   注意：D 项不用 pid.c 里的误差微分，而是直接使用视觉速度做阻尼，
-   这样更稳、更好调。 */
-static PID_t g_pid_x_pos;   // 球 X 方向位置环（最终输出平台 X 轴目标倾角）
-static PID_t g_pid_y_pos;   // 球 Y 方向位置环（最终输出平台 Y 轴目标倾角）
+/* 这里只保留横向纠偏用 PID。
+   沿路径主方向改成“进度-速度规划”控制，不再直接用位置 PID 硬推。 */
+static PID_t g_pid_lateral;
 
-/* -------------------- 外环 PID 参数 -------------------- */
-/* 调参建议：
-   1. 先调 kp，让球“能明显朝目标动”
-   2. 再调 kd_vel，抑制冲过头
-   3. 最后只加很小 ki，消除残余静差 */
-#define OUTER_X_KP        (55.00f)
-#define OUTER_X_KI        (0.0000f)
-#define OUTER_X_KD_VEL    (0.0500f)
-
-#define OUTER_Y_KP        (55.00f)
-#define OUTER_Y_KI        (0.0000f)
-#define OUTER_Y_KD_VEL    (0.0500f)
+/* -------------------- 路径段状态 -------------------- */
+/* 记录当前这一段运动的起点和目标点。
+   只要目标点变化，就把当前球位置记成新一段的起点。 */
+static float g_seg_start_x_mm = 0.0f;
+static float g_seg_start_y_mm = 0.0f;
+static float g_seg_target_x_mm = 0.0f;
+static float g_seg_target_y_mm = 0.0f;
+static uint8_t g_seg_valid = 0U;
 
 /* -------------------- 模块内部状态 -------------------- */
-static uint8_t g_outer_inited = 0U;   // 外环 PID 是否已初始化
-static uint8_t g_last_mode = 0xFFU;   // 上一次控制模式，用于切模式时清积分
+static uint8_t g_outer_inited = 0U;
+static uint8_t g_last_mode = 0xFFU;
 
-/**
- * @brief 根据控制模式和位置误差计算允许的最大倾角
- * @param mode       当前控制模式
- * @param pos_err_mm 当前轴位置误差，单位：毫米
- * @retval 允许的最大倾角，单位：度
- *
- * @note 逻辑说明：
- *       1. BRAKE（刹车）模式时，使用较小的制动倾角
- *       2. HOLD（保持）模式时，如果已经很接近目标，就只允许更小倾角，防止抖动
- *       3. 其他情况，允许用最大倾角快速运动
- */
+/* -------------------- 速度规划参数 -------------------- */
+/* 这些参数是这版逻辑的关键。 */
+#define PATH_RELOCK_TARGET_EPS_MM      (3.0f)   // 目标变化超过该值，认为进入新路径段
+
+/* 不同模式下的路径峰值速度（毫米/秒） */
+#define PATH_VPEAK_FAST_MMPS           (260.0f)
+#define PATH_VPEAK_BRAKE_MMPS          (160.0f)
+#define PATH_VPEAK_HOLD_MMPS            (80.0f)
+
+/* 沿路径方向：速度误差 -> 倾角 的比例 */
+#define PATH_K_TAN_FAST                (0.030f)
+#define PATH_K_TAN_BRAKE               (0.040f)
+#define PATH_K_TAN_HOLD                (0.050f)
+
+/* 终点附近的位置“收尾拉回” */
+#define PATH_K_END_POS                 (0.010f)
+
+/* 横向偏离路径的纠偏参数 */
+#define PATH_K_LAT_P                   (0.060f)
+#define PATH_K_LAT_D                   (0.0040f)
+
+/* -------------------- 工具函数 -------------------- */
 static float GetTiltLimitDeg(uint8_t mode, float pos_err_mm)
 {
-    /* 刹车模式：限制在制动倾角内 */
     if (mode == CTRL_MODE_BRAKE)
     {
         return BOARD_BRAKE_TILT_REF_DEG;
     }
 
-    /* 保持模式：如果已经靠近目标，则进一步减小倾角 */
     if (mode == CTRL_MODE_HOLD)
     {
         if (ABSF(pos_err_mm) <= REGION_ENTER_RADIUS_MM)
@@ -59,26 +75,72 @@ static float GetTiltLimitDeg(uint8_t mode, float pos_err_mm)
         }
     }
 
-    /* 默认使用最大允许倾角 */
     return BOARD_MAX_TILT_REF_DEG;
+}
+
+static float GetPeakSpeedByMode(uint8_t mode)
+{
+    if (mode == CTRL_MODE_BRAKE) return PATH_VPEAK_BRAKE_MMPS;
+    if (mode == CTRL_MODE_HOLD)  return PATH_VPEAK_HOLD_MMPS;
+    return PATH_VPEAK_FAST_MMPS;
+}
+
+static float GetTanGainByMode(uint8_t mode)
+{
+    if (mode == CTRL_MODE_BRAKE) return PATH_K_TAN_BRAKE;
+    if (mode == CTRL_MODE_HOLD)  return PATH_K_TAN_HOLD;
+    return PATH_K_TAN_FAST;
+}
+
+/**
+ * @brief 根据路径进度生成“目标线速度”
+ * @param progress 当前路径进度，0~1
+ * @param v_peak   该模式下的峰值线速度
+ * @retval 当前进度对应的目标线速度（毫米/秒）
+ *
+ * @note
+ * - 前半程：逐步加速
+ * - 后半程：逐步减速
+ * - 超过终点：目标速度给负值，帮助反向制动
+ */
+static float BuildDesiredLineSpeed(float progress, float v_peak)
+{
+    if (progress <= 0.0f)
+    {
+        return 0.25f * v_peak;  // 起步不要给 0，留一点“起步推力”
+    }
+
+    if (progress < 0.5f)
+    {
+        /* 0~0.5：从 0.25*v_peak 线性升到 1.0*v_peak */
+        return v_peak * (0.25f + 1.50f * progress);
+    }
+
+    if (progress <= 1.0f)
+    {
+        /* 0.5~1.0：从 1.0*v_peak 线性降到 0 */
+        return v_peak * (2.0f - 2.0f * progress);
+    }
+
+    /* 已经过终点：给一个反向目标速度，帮助刹车回拉 */
+    return -0.30f * v_peak;
 }
 
 /**
  * @brief 外环控制器初始化
- * @note 初始化两个方向的位置 PID
  */
 void BallOuterLoop_Init(void)
 {
-    /* 这里只用 PID_t 的 P / I 两部分，D 项由“速度阻尼”单独完成 */
-    PID_Init(&g_pid_x_pos,
-             OUTER_X_KP, OUTER_X_KI, 0.0f,
-             -20.0f, 20.0f,
-             -3000.0f, 3000.0f);
+    PID_Init(&g_pid_lateral,
+             PATH_K_LAT_P, 0.0f, 0.0f,
+             -10.0f, 10.0f,
+             -1000.0f, 1000.0f);
 
-    PID_Init(&g_pid_y_pos,
-             OUTER_Y_KP, OUTER_Y_KI, 0.0f,
-             -20.0f, 20.0f,
-             -3000.0f, 3000.0f);
+    g_seg_start_x_mm = 0.0f;
+    g_seg_start_y_mm = 0.0f;
+    g_seg_target_x_mm = 0.0f;
+    g_seg_target_y_mm = 0.0f;
+    g_seg_valid = 0U;
 
     g_outer_inited = 1U;
     g_last_mode = 0xFFU;
@@ -86,35 +148,22 @@ void BallOuterLoop_Init(void)
 
 /**
  * @brief 外环控制器重置
- * @note 清空两个方向的位置环积分状态
  */
 void BallOuterLoop_Reset(void)
 {
-    PID_Reset(&g_pid_x_pos);
-    PID_Reset(&g_pid_y_pos);
+    PID_Reset(&g_pid_lateral);
+
+    g_seg_start_x_mm = 0.0f;
+    g_seg_start_y_mm = 0.0f;
+    g_seg_target_x_mm = 0.0f;
+    g_seg_target_y_mm = 0.0f;
+    g_seg_valid = 0U;
+
     g_last_mode = 0xFFU;
 }
 
 /**
  * @brief 外环主控制函数
- * @param x_ref    目标 X 坐标，单位：毫米
- * @param y_ref    目标 Y 坐标，单位：毫米
- * @param x_meas   当前小球实际 X 坐标，单位：毫米
- * @param y_meas   当前小球实际 Y 坐标，单位：毫米
- * @param vx_meas  当前小球实际 X 速度，单位：毫米/秒
- * @param vy_meas  当前小球实际 Y 速度，单位：毫米/秒
- * @param mode     当前控制模式（FAST / BRAKE / HOLD）
- * @param out      输出结构体指针，用于返回平台目标倾角
- *
- * @note 控制思想：
- *       1. 位置环用 PI 计算“该倾多少角”
- *       2. 再减去一个与当前球速度成比例的阻尼项 D
- *       3. 最后按当前模式进行限幅
- *
- *       【修正】
- *       按当前机械定义直接映射：
- *       - X轴（左右）位置误差 -> 平台 X 轴目标倾角
- *       - Y轴（上下）位置误差 -> 平台 Y 轴目标倾角
  */
 void BallOuterLoop_Run(float x_ref, float y_ref,
                        float x_meas, float y_meas,
@@ -122,57 +171,131 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
                        uint8_t mode,
                        BallOuterOutput_t *out)
 {
-    float x_tilt_limit;     // 平台 X 轴最大倾角
-    float y_tilt_limit;     // 平台 Y 轴最大倾角
+    float path_dx, path_dy;
+    float path_len, inv_path_len;
+    float tx, ty;             // 路径切向单位向量
+    float nx, ny;             // 路径法向单位向量
 
-    float theta_x_cmd_deg;  // 控制球 X 方向的倾角命令
-    float theta_y_cmd_deg;  // 控制球 Y 方向的倾角命令
+    float cx, cy;             // 当前点相对起点坐标
+    float s;                  // 当前在路径上的投影长度
+    float progress;           // 当前路径进度 0~1
 
-    /* 空指针保护 */
+    float v_line;             // 当前沿路径方向的速度
+    float v_lat;              // 当前横向速度
+    float v_peak;             // 当前模式下的峰值目标速度
+    float v_ref;              // 当前进度下的目标线速度
+
+    float remain_mm;          // 剩余路程
+    float tan_cmd_deg;        // 沿路径方向的倾角命令
+    float lat_cmd_deg;        // 横向纠偏倾角命令
+
+    float theta_x_cmd_deg;
+    float theta_y_cmd_deg;
+
+    float x_tilt_limit;
+    float y_tilt_limit;
+
     if (out == NULL)
     {
         return;
     }
 
-    /* 若尚未初始化，则补初始化一次 */
     if (!g_outer_inited)
     {
         BallOuterLoop_Init();
     }
 
-    /* 切模式时，把积分清掉，防止旧状态影响新模式 */
+    /* 模式变化时，横向纠偏状态清一下，避免旧状态影响 */
     if (mode != g_last_mode)
     {
-        PID_Reset(&g_pid_x_pos);
-        PID_Reset(&g_pid_y_pos);
+        PID_Reset(&g_pid_lateral);
         g_last_mode = mode;
     }
 
-    /* 根据当前模式决定最大倾角 */
-    x_tilt_limit = GetTiltLimitDeg(mode, x_meas - x_ref);
-    y_tilt_limit = GetTiltLimitDeg(mode, y_meas - y_ref);
-
-    /* 只有在有效控制模式下才输出角度 */
-    if (mode == CTRL_MODE_FAST || mode == CTRL_MODE_HOLD || mode == CTRL_MODE_BRAKE)
+    /* -------------------- 如果目标点变化，重新锁定一段新路径 -------------------- */
+    if ((!g_seg_valid) ||
+        (ABSF(x_ref - g_seg_target_x_mm) > PATH_RELOCK_TARGET_EPS_MM) ||
+        (ABSF(y_ref - g_seg_target_y_mm) > PATH_RELOCK_TARGET_EPS_MM))
     {
-        /* -------------------- 球 X 方向：位置 PI + 速度阻尼 D -------------------- */
-        /* 位置环输出的是“平台 X 轴应该倾多少角”，再减去速度阻尼项 */
-        theta_x_cmd_deg = PID_Run(&g_pid_x_pos, x_ref, x_meas, CONTROL_OUTER_DT_S)
-                        - OUTER_X_KD_VEL * vx_meas;
+        g_seg_start_x_mm = x_meas;
+        g_seg_start_y_mm = y_meas;
+        g_seg_target_x_mm = x_ref;
+        g_seg_target_y_mm = y_ref;
+        g_seg_valid = 1U;
 
-        /* -------------------- 球 Y 方向：位置 PI + 速度阻尼 D -------------------- */
-        /* 位置环输出的是“平台 Y 轴应该倾多少角”，再减去速度阻尼项 */
-        theta_y_cmd_deg = PID_Run(&g_pid_y_pos, y_ref, y_meas, CONTROL_OUTER_DT_S)
-                        - OUTER_Y_KD_VEL * vy_meas;
-
-        /* 最终按当前模式允许的最大倾角限幅 */
-        out->theta_x_ref_deg = Limitf(theta_x_cmd_deg, -x_tilt_limit, x_tilt_limit);
-        out->theta_y_ref_deg = Limitf(theta_y_cmd_deg, -y_tilt_limit, y_tilt_limit);
+        PID_Reset(&g_pid_lateral);
     }
-    else
+
+    /* 当前路径向量 */
+    path_dx = g_seg_target_x_mm - g_seg_start_x_mm;
+    path_dy = g_seg_target_y_mm - g_seg_start_y_mm;
+    path_len = sqrtf(path_dx * path_dx + path_dy * path_dy);
+
+    /* 如果目标太近，直接清零 */
+    if (path_len < 1.0f)
     {
         out->theta_x_ref_deg = 0.0f;
         out->theta_y_ref_deg = 0.0f;
+        return;
     }
-}
 
+    inv_path_len = 1.0f / path_len;
+
+    /* 路径切向单位向量 */
+    tx = path_dx * inv_path_len;
+    ty = path_dy * inv_path_len;
+
+    /* 路径法向单位向量（左法向） */
+    nx = -ty;
+    ny = tx;
+
+    /* 当前球位置相对起点的向量 */
+    cx = x_meas - g_seg_start_x_mm;
+    cy = y_meas - g_seg_start_y_mm;
+
+    /* 当前在路径方向上的投影长度 */
+    s = cx * tx + cy * ty;
+
+    /* 进度：允许略微超过 1，便于过点后反向刹车 */
+    progress = s / path_len;
+    progress = Limitf(progress, -0.10f, 1.20f);
+
+    /* 当前沿路径方向的速度 */
+    v_line = vx_meas * tx + vy_meas * ty;
+
+    /* 当前横向速度 */
+    v_lat = vx_meas * nx + vy_meas * ny;
+
+    /* 当前模式对应的峰值速度 */
+    v_peak = GetPeakSpeedByMode(mode);
+
+    /* 根据“路径进度”生成目标线速度 */
+    v_ref = BuildDesiredLineSpeed(progress, v_peak);
+
+    /* 剩余路程（允许为负，表示已经冲过目标） */
+    remain_mm = path_len - s;
+
+    /* -------------------- 沿路径方向控制 -------------------- */
+    /* 核心逻辑：
+       - 前半程：v_ref 逐渐增大 => 倾角朝目标方向，推进加速
+       - 后半程：v_ref 逐渐减小 => 若当前速度仍大，就会自动给反向倾角减速
+       - 接近终点：再叠加一点位置收尾项，帮助平稳停住 */
+    tan_cmd_deg = GetTanGainByMode(mode) * (v_ref - v_line)
+                + PATH_K_END_POS * remain_mm;
+
+    /* -------------------- 横向纠偏控制 -------------------- */
+    /* 横向偏离路径太多时，给一点法向纠偏倾角 */
+    lat_cmd_deg = PID_RunErr(&g_pid_lateral, -(cx * nx + cy * ny), CONTROL_OUTER_DT_S)
+                - PATH_K_LAT_D * v_lat;
+
+    /* -------------------- 合成到 X / Y 两轴倾角 -------------------- */
+    theta_x_cmd_deg = tan_cmd_deg * tx + lat_cmd_deg * nx;
+    theta_y_cmd_deg = tan_cmd_deg * ty + lat_cmd_deg * ny;
+
+    /* -------------------- 仍保留现有的模式限幅 -------------------- */
+    x_tilt_limit = GetTiltLimitDeg(mode, x_meas - x_ref);
+    y_tilt_limit = GetTiltLimitDeg(mode, y_meas - y_ref);
+
+    out->theta_x_ref_deg = Limitf(theta_x_cmd_deg, -x_tilt_limit, x_tilt_limit);
+    out->theta_y_ref_deg = Limitf(theta_y_cmd_deg, -y_tilt_limit, y_tilt_limit);
+}
