@@ -12,13 +12,13 @@ static PID_t g_pid_theta_y;
    1. 先调 kp，让平台能明显跟随目标倾角
    2. 再调 kd_rate，减少发冲和抖动
    3. 最后只加一点点 ki，修正轻微静差 */
-#define INNER_X_KP          (15.20f)//13.2
-#define INNER_X_KI          (0.020f)
-#define INNER_X_KD_RATE     (0.020f)
+#define INNER_X_KP          (3.50f)//13.2
+#define INNER_X_KI          (0.030f)
+#define INNER_X_KD_RATE     (0.010f)
 
-#define INNER_Y_KP          (15.20f)//6.2
-#define INNER_Y_KI          (0.020f)
-#define INNER_Y_KD_RATE     (0.020f)
+#define INNER_Y_KP          (3.50f)//6.2
+#define INNER_Y_KI          (0.030f)
+#define INNER_Y_KD_RATE     (0.010f)
 
 /* -------------------- 模块内部状态 -------------------- */
 static uint8_t g_inner_inited = 0U;

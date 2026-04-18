@@ -40,23 +40,23 @@ static uint8_t g_last_mode = 0xFFU;
 
 /* -------------------- 速度规划参数 -------------------- */
 /* 这些参数是这版逻辑的关键。 */
-#define PATH_RELOCK_TARGET_EPS_MM      (3.0f)   // 目标变化超过该值，认为进入新路径段
+#define PATH_RELOCK_TARGET_EPS_MM      (5.0f)   // 目标变化超过该值，认为进入新路径段
 
 /* 不同模式下的路径峰值速度（毫米/秒） */
-#define PATH_VPEAK_FAST_MMPS           (260.0f)
-#define PATH_VPEAK_BRAKE_MMPS          (160.0f)
-#define PATH_VPEAK_HOLD_MMPS            (80.0f)
+#define PATH_VPEAK_FAST_MMPS           (200.0f)
+#define PATH_VPEAK_BRAKE_MMPS          (100.0f)
+#define PATH_VPEAK_HOLD_MMPS            (50.0f)
 
 /* 沿路径方向：速度误差 -> 倾角 的比例 */
-#define PATH_K_TAN_FAST                (0.030f)
-#define PATH_K_TAN_BRAKE               (0.040f)
-#define PATH_K_TAN_HOLD                (0.050f)
+#define PATH_K_TAN_FAST                (0.022f)
+#define PATH_K_TAN_BRAKE               (0.032f)
+#define PATH_K_TAN_HOLD                (0.040f)
 
 /* 终点附近的位置“收尾拉回” */
-#define PATH_K_END_POS                 (0.010f)
+#define PATH_K_END_POS                 (0.008f)
 
 /* 横向偏离路径的纠偏参数 */
-#define PATH_K_LAT_P                   (0.060f)
+#define PATH_K_LAT_P                   (0.055f)
 #define PATH_K_LAT_D                   (0.0040f)
 
 /* -------------------- 工具函数 -------------------- */

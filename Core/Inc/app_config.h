@@ -220,7 +220,7 @@ extern "C" {
 /**
  * @brief X 轴舵机负向最大命令角（度）
  */
-#define SERVO_X_NEG_MAX_CMD_DEG         15.0f
+#define SERVO_X_NEG_MAX_CMD_DEG         20.0f
 
 /**
  * @brief X 轴舵机正向最大命令角（度）
@@ -230,7 +230,7 @@ extern "C" {
 /**
  * @brief Y 轴舵机负向最大命令角（度）
  */
-#define SERVO_Y_NEG_MAX_CMD_DEG         15.0f
+#define SERVO_Y_NEG_MAX_CMD_DEG         20.0f
 
 /**
  * @brief Y 轴舵机正向最大命令角（度）
@@ -297,7 +297,7 @@ extern "C" {
 /**
  * @brief IMU 横滚角方向是否反向
  */
-#define IMU_ROLL_REVERSE                1
+#define IMU_ROLL_REVERSE                0
 
 /**
  * @brief IMU 俯仰角方向是否反向
