@@ -42,7 +42,11 @@ volatile uint8_t  dbg_task_running = 0U;    // 当前任务是否在运行
 volatile uint8_t  dbg_route0 = 0U;          // 当前路径第 1 个点
 volatile uint8_t  dbg_route1 = 0U;          // 当前路径第 2 个点
 volatile uint8_t  dbg_route2 = 0U;          // 当前路径第 3 个点
-volatile uint8_t  dbg_route3 = 0U;          // 当前路径第 4 个点
+volatile uint8_t  dbg_route3 = 0U;  // 当前路径第 4 个点
+volatile uint32_t dbg_run10ms_exec_cnt = 0U;
+volatile float    dbg_outer_theta_x = 0.0f;
+volatile float    dbg_outer_theta_y = 0.0f;
+volatile uint32_t dbg_ball_age_ms = 0U;
 
 /* ======== 调试镜像变量：控制层 ======== */
 /* 这些变量方便你观察当前球状态和控制目标 */
@@ -401,6 +405,9 @@ void ControllerMgr_UpdateInputs(void)
  */
 void ControllerMgr_Run10ms(void)
 {
+	dbg_run10ms_exec_cnt++;
+	dbg_ball_age_ms = g_sys_ms - g_sys.ball.tick_ms;
+	
     BallOuterOutput_t outer; // 外环输出：平台目标倾角
 
     /* 先从任务管理器读取当前目标点和模式 */
@@ -438,6 +445,9 @@ void ControllerMgr_Run10ms(void)
                       g_sys.ball.vx_mmps, g_sys.ball.vy_mmps,
                       g_sys.ref.mode, &outer);
 
+	dbg_outer_theta_x = outer.theta_x_ref_deg;
+	dbg_outer_theta_y = outer.theta_y_ref_deg;
+	
     /* 写回系统上下文 */
     g_sys.ref.theta_x_ref_deg = outer.theta_x_ref_deg;
     g_sys.ref.theta_y_ref_deg = outer.theta_y_ref_deg;

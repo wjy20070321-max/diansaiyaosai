@@ -39,69 +39,45 @@ static uint32_t Servo_UsToCcr(float us)
  */
 static float Servo_AbsDegToUs(float abs_deg)
 {
-    /* 防止绝对角度超出舵机物理允许范围 */
     abs_deg = Limitf(abs_deg, 0.0f, SERVO_PHYS_TOTAL_DEG);
 
-    /* 线性映射：角度 -> 脉宽 */
     return SERVO_PWM_MIN_US +
            (abs_deg / SERVO_PHYS_TOTAL_DEG) * (SERVO_PWM_MAX_US - SERVO_PWM_MIN_US);
 }
 
 /**
- * @brief 将“相对平台中心角”转换为“舵机绝对角度”
+ * @brief 将“相对平台中心角”转换为“舵机绝对角度（每轴独立版）”
  * @param rel_deg           相对平台中心的目标角度，单位：度，可正可负
- * @param center_offset_deg 舵机安装中心补偿角，单位：度
- * @param neg_max_cmd_deg   负向最大相对控制角，单位：度
- * @param pos_max_cmd_deg   正向最大相对控制角，单位：度
+ * @param work_center_deg   当前轴的工作中心角，单位：度
+ * @param center_offset_deg 当前轴安装补偿角，单位：度
+ * @param neg_max_cmd_deg   当前轴负向最大相对命令角，单位：度
+ * @param pos_max_cmd_deg   当前轴正向最大相对命令角，单位：度
+ * @param work_min_deg      当前轴有效工作区最小角，单位：度
+ * @param work_max_deg      当前轴有效工作区最大角，单位：度
  * @retval 转换后的绝对舵机角度，单位：度
  *
- * @note 这是这个舵机模块里很关键的一步：
- *
- *       你的控制器输出的不是“舵机绝对角度”，
- *       而是“相对平台中位的偏转量”。
- *
- *       例如：
- *       - 0°  表示平台回中
- *       - +5° 表示在平台中心基础上向一个方向偏 5°
- *       - -5° 表示向反方向偏 5°
- *
- *       但舵机真正需要的是“绝对物理角度”，例如：
- *       - 90°
- *       - 95°
- *       - 85°
- *
- *       所以这里要做 3 件事：
- *       1. 先把相对命令角 rel_deg 限制在允许控制范围内
- *       2. 再以机构中心角 SERVO_WORK_CENTER_DEG 为基准，换算成绝对角
- *       3. 最后把结果限制在机构有效工作区 [SERVO_WORK_MIN_DEG, SERVO_WORK_MAX_DEG]
- *
- *       【修改】
- *       这里原来是“对称限幅”，即 ±max_cmd_deg。
- *       现在改成“非对称限幅”：
- *       - 负向最多到 -neg_max_cmd_deg
- *       - 正向最多到 +pos_max_cmd_deg
- *
- *       这是为了匹配你当前机械真实边界：
- *       - 90 -> 0   可以走 90°
- *       - 90 -> 120 只能走 30°
+ * @note 这是这次修正的核心：
+ *       X / Y 轴不再共用同一套中心位和工作区，
+ *       而是每个轴独立建模。
  */
-static float Servo_RelDegToAbsDeg(float rel_deg,
-                                  float center_offset_deg,
-                                  float neg_max_cmd_deg,
-                                  float pos_max_cmd_deg)
+static float Servo_RelDegToAbsDegAxis(float rel_deg,
+                                      float work_center_deg,
+                                      float center_offset_deg,
+                                      float neg_max_cmd_deg,
+                                      float pos_max_cmd_deg,
+                                      float work_min_deg,
+                                      float work_max_deg)
 {
     float abs_deg;
 
-    /* 【修改】非对称限幅，按真实机械边界分别限制正向和负向 */
+    /* 非对称限幅：按真实机械边界分别限制正向和负向 */
     rel_deg = Limitf(rel_deg, -neg_max_cmd_deg, pos_max_cmd_deg);
 
-    /* 关键步骤：
-       绝对角 = 机构中心角 + 安装补偿角 + 相对偏转角
-       注意这里以“机构有效中心角”作为中心，而不是舵机物理中点 135° */
-    abs_deg = SERVO_WORK_CENTER_DEG + center_offset_deg + rel_deg;
+    /* 绝对角 = 当前轴工作中心角 + 当前轴安装补偿 + 相对偏转角 */
+    abs_deg = work_center_deg + center_offset_deg + rel_deg;
 
-    /* 最终只允许舵机落在机构有效工作区内 */
-    abs_deg = Limitf(abs_deg, SERVO_WORK_MIN_DEG, SERVO_WORK_MAX_DEG);
+    /* 最终只允许落在当前轴有效工作区内 */
+    abs_deg = Limitf(abs_deg, work_min_deg, work_max_deg);
 
     return abs_deg;
 }
@@ -116,9 +92,6 @@ static float Servo_RelDegToAbsDeg(float rel_deg,
  *       当前默认映射关系是：
  *       - TIM2_CH1 -> X 轴舵机
  *       - TIM2_CH2 -> Y 轴舵机
- *
- *       如果以后你修改了定时器或引脚，
- *       这里以及 tim.c 里对应的 PWM 配置要同步改。
  */
 void Servo_Init(void)
 {
@@ -130,34 +103,26 @@ void Servo_Init(void)
 /**
  * @brief 设置 X 轴舵机角度
  * @param deg 相对平台中心的目标角度，单位：度
- *
- * @note 输入的 deg 不是“舵机物理绝对角度”，
- *       而是“相对平台中位”的控制角度。
- *
- *       本函数内部会依次完成：
- *       1. 根据配置决定是否反向
- *       2. 相对角 -> 绝对角
- *       3. 绝对角 -> 脉宽
- *       4. 脉宽 -> CCR
- *       5. 写入 TIM2_CH1 比较寄存器
  */
 void Servo_SetXDeg(float deg)
 {
 #if SERVO_X_REVERSE
-    /* 如果配置要求 X 轴方向反向，则把控制角取反 */
     deg = -deg;
 #endif
 
     __HAL_TIM_SET_COMPARE(
-        &htim2,                // 使用 TIM2
-        TIM_CHANNEL_1,         // CH1 对应 X 轴舵机
-        Servo_UsToCcr(         // 脉宽 -> CCR
-            Servo_AbsDegToUs(  // 绝对角 -> 脉宽
-                Servo_RelDegToAbsDeg(
-                    deg,                        // 当前相对角度命令
-                    SERVO_X_CENTER_OFFSET_DEG, // X 轴安装中心补偿
-                    SERVO_X_NEG_MAX_CMD_DEG,   // 【修改】X 轴负向最大允许相对命令角
-                    SERVO_X_POS_MAX_CMD_DEG    // 【修改】X 轴正向最大允许相对命令角
+        &htim2,
+        TIM_CHANNEL_1,
+        Servo_UsToCcr(
+            Servo_AbsDegToUs(
+                Servo_RelDegToAbsDegAxis(
+                    deg,
+                    SERVO_X_WORK_CENTER_DEG,
+                    SERVO_X_CENTER_OFFSET_DEG,
+                    SERVO_X_NEG_MAX_CMD_DEG,
+                    SERVO_X_POS_MAX_CMD_DEG,
+                    SERVO_X_WORK_MIN_DEG,
+                    SERVO_X_WORK_MAX_DEG
                 )
             )
         )
@@ -167,31 +132,26 @@ void Servo_SetXDeg(float deg)
 /**
  * @brief 设置 Y 轴舵机角度
  * @param deg 相对平台中心的目标角度，单位：度
- *
- * @note 与 X 轴类似，内部也会依次完成：
- *       1. 方向反转处理
- *       2. 相对角 -> 绝对角
- *       3. 绝对角 -> 脉宽
- *       4. 脉宽 -> CCR
- *       5. 写入 TIM2_CH2 比较寄存器
  */
 void Servo_SetYDeg(float deg)
 {
 #if SERVO_Y_REVERSE
-    /* 如果配置要求 Y 轴方向反向，则把控制角取反 */
     deg = -deg;
 #endif
 
     __HAL_TIM_SET_COMPARE(
-        &htim2,                // 使用 TIM2
-        TIM_CHANNEL_2,         // CH2 对应 Y 轴舵机
+        &htim2,
+        TIM_CHANNEL_2,
         Servo_UsToCcr(
             Servo_AbsDegToUs(
-                Servo_RelDegToAbsDeg(
-                    deg,                        // 当前相对角度命令
-                    SERVO_Y_CENTER_OFFSET_DEG, // Y 轴安装中心补偿
-                    SERVO_Y_NEG_MAX_CMD_DEG,   // 【修改】Y 轴负向最大允许相对命令角
-                    SERVO_Y_POS_MAX_CMD_DEG    // 【修改】Y 轴正向最大允许相对命令角
+                Servo_RelDegToAbsDegAxis(
+                    deg,
+                    SERVO_Y_WORK_CENTER_DEG,
+                    SERVO_Y_CENTER_OFFSET_DEG,
+                    SERVO_Y_NEG_MAX_CMD_DEG,
+                    SERVO_Y_POS_MAX_CMD_DEG,
+                    SERVO_Y_WORK_MIN_DEG,
+                    SERVO_Y_WORK_MAX_DEG
                 )
             )
         )
@@ -202,13 +162,6 @@ void Servo_SetYDeg(float deg)
  * @brief 同时设置 X / Y 两个舵机的目标角度
  * @param x_deg X 轴相对平台中心的目标角度，单位：度
  * @param y_deg Y 轴相对平台中心的目标角度，单位：度
- *
- * @note 该函数只是一个方便调用的封装，
- *       内部实际上还是分别调用：
- *       - Servo_SetXDeg()
- *       - Servo_SetYDeg()
- *
- *       常用于控制器每一拍同时输出两个轴的舵机命令。
  */
 void Servo_SetXYDeg(float x_deg, float y_deg)
 {
@@ -221,14 +174,6 @@ void Servo_SetXYDeg(float x_deg, float y_deg)
  *
  * @note 这里的“回中”不是直接写固定脉宽，
  *       而是把两个轴都设为“相对平台中心角 = 0°”。
- *
- *       这样做的好处是：
- *       - 会自动经过方向反转处理
- *       - 会自动经过安装中心补偿
- *       - 会自动经过绝对角/脉宽换算
- *
- *       最终会让舵机回到机构有效工作区中心附近，
- *       也就是当前配置中的 90° 附近。
  */
 void Servo_Center(void)
 {

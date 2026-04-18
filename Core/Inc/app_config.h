@@ -68,12 +68,12 @@ extern "C" {
 /**
  * @brief 平台中心 X 坐标（毫米）
  */
-#define BOARD_CENTER_X_MM               300.0f
+#define BOARD_CENTER_X_MM               305.0f
 
 /**
  * @brief 平台中心 Y 坐标（毫米）
  */
-#define BOARD_CENTER_Y_MM               300.0f
+#define BOARD_CENTER_Y_MM               305.0f
 
 /* ==================== 控制周期配置 ==================== */
 
@@ -164,26 +164,46 @@ extern "C" {
  * @brief 舵机物理总角度（度）
  * @note  舵机本体标称总行程为 270°
  */
-#define SERVO_PHYS_TOTAL_DEG            270.0f
+#define SERVO_PHYS_TOTAL_DEG            180.0f
+
+/* -------------------- X 轴独立工作区配置 -------------------- */
 
 /**
- * @brief 舵机有效工作区最小角（度）
+ * @brief X 轴舵机有效工作区最小角（度）
+ */
+#define SERVO_X_WORK_MIN_DEG            10.0f
+
+/**
+ * @brief X 轴舵机有效工作区最大角（度）
  * @note  当前机械实测安全单调区：0~120°
  */
-#define SERVO_WORK_MIN_DEG              0.0f
+#define SERVO_X_WORK_MAX_DEG            170.0f
 
 /**
- * @brief 舵机有效工作区最大角（度）
- * @note  【修改】原来按 180°，现在按你们实物改成 120°
- *       因为超过 120° 会机械卡死
+ * @brief X 轴舵机工作中心角（度）
  */
-#define SERVO_WORK_MAX_DEG              120.0f
+#define SERVO_X_WORK_CENTER_DEG         90.0f
+
+/* -------------------- Y 轴独立工作区配置 -------------------- */
 
 /**
- * @brief 舵机工作中心角（度）
- * @note  以 43° 为中位
+ * @brief Y 轴舵机有效工作区最小角（度）
  */
-#define SERVO_WORK_CENTER_DEG           43.0f
+#define SERVO_Y_WORK_MIN_DEG            10.0f
+
+/**
+ * @brief Y 轴舵机有效工作区最大角（度）
+ * @note  当前先与 X 轴一致，后续若机械实测不同可单独再改
+ */
+#define SERVO_Y_WORK_MAX_DEG            170.0f
+
+/**
+ * @brief Y 轴舵机工作中心角（度）
+ * @note  这是这次最关键的修正点。
+ *       现在先单独给 Y 轴一套中心位，后续你只调它即可。
+ *       如果“Y 轴能上抬下不来”，优先改这个值，不要动 X 轴。
+ */
+#define SERVO_Y_WORK_CENTER_DEG         90.0f
 
 /**
  * @brief X 轴舵机中心偏移（度）
@@ -193,57 +213,53 @@ extern "C" {
 
 /**
  * @brief Y 轴舵机中心偏移（度）
+ * @note  一般先保持 0，优先调 SERVO_Y_WORK_CENTER_DEG
  */
 #define SERVO_Y_CENTER_OFFSET_DEG       0.0f
 
 /**
  * @brief X 轴舵机负向最大命令角（度）
- * @note  【新增】以 90° 为中位时：
- *       - 90 -> 0   可走 90°
- *       因此负向安全范围保留到 -90°
  */
 #define SERVO_X_NEG_MAX_CMD_DEG         20.0f
 
 /**
  * @brief X 轴舵机正向最大命令角（度）
- * @note  【新增】以 90° 为中位时：
- *       - 90 -> 120 只可走 30°
- *       因此正向安全范围限制为 +30°
  */
 #define SERVO_X_POS_MAX_CMD_DEG         20.0f
 
 /**
  * @brief Y 轴舵机负向最大命令角（度）
- * @note  【新增】当前先按与你描述相同的机械边界处理
  */
 #define SERVO_Y_NEG_MAX_CMD_DEG         20.0f
 
 /**
  * @brief Y 轴舵机正向最大命令角（度）
- * @note  【新增】当前先按与你描述相同的机械边界处理
  */
 #define SERVO_Y_POS_MAX_CMD_DEG         20.0f
 
 /**
  * @brief X 轴舵机最大命令角（度）
- * @note  【兼容保留】为避免旧代码里仍引用该宏，
- *       这里保守地取“更小的正向极限值”
+ * @note  【兼容保留】
  */
 #define SERVO_X_MAX_CMD_DEG             (SERVO_X_POS_MAX_CMD_DEG)
 
 /**
  * @brief Y 轴舵机最大命令角（度）
- * @note  【兼容保留】为避免旧代码里仍引用该宏，
- *       这里保守地取“更小的正向极限值”
+ * @note  【兼容保留】
  */
 #define SERVO_Y_MAX_CMD_DEG             (SERVO_Y_POS_MAX_CMD_DEG)
 
 /**
  * @brief 舵机最大命令角统一值
- * @note  【兼容保留】旧代码如果仍用统一对称限幅，
- *       则按最保守的正向上限处理，避免机械撞限位
+ * @note  【兼容保留】
  */
 #define SERVO_MAX_CMD_DEG               ((SERVO_X_MAX_CMD_DEG < SERVO_Y_MAX_CMD_DEG) ? SERVO_X_MAX_CMD_DEG : SERVO_Y_MAX_CMD_DEG)
+
+/* -------------------- 旧宏兼容保留 -------------------- */
+/* 如果工程里还有其他地方引用旧的统一工作区宏，这里先兼容到 X 轴参数 */
+#define SERVO_WORK_MIN_DEG              SERVO_X_WORK_MIN_DEG
+#define SERVO_WORK_MAX_DEG              SERVO_X_WORK_MAX_DEG
+#define SERVO_WORK_CENTER_DEG           SERVO_X_WORK_CENTER_DEG
 
 /* ==================== 外环角度限制 ==================== */
 
@@ -251,13 +267,13 @@ extern "C" {
  * @brief 平台最大倾斜参考角（度）
  * @note  外环输出给内环的最大目标倾角
  */
-#define BOARD_MAX_TILT_REF_DEG          30.0f
+#define BOARD_MAX_TILT_REF_DEG          8.0f
 
 /**
  * @brief 保持状态下的平台参考倾角（度）
  * @note  用于目标点附近的小范围稳定控制
  */
-#define BOARD_HOLD_TILT_REF_DEG         15.0f
+#define BOARD_HOLD_TILT_REF_DEG         2.0f
 
 /**
  * @brief 刹车状态下的平台参考倾角（度）
@@ -271,12 +287,12 @@ extern "C" {
  * @brief X 轴舵机方向是否反向
  * @note  0=正常，1=反向
  */
-#define SERVO_X_REVERSE                 0
+#define SERVO_X_REVERSE                 1
 
 /**
  * @brief Y 轴舵机方向是否反向
  */
-#define SERVO_Y_REVERSE                 0
+#define SERVO_Y_REVERSE                 1
 
 /**
  * @brief IMU 横滚角方向是否反向
@@ -286,7 +302,7 @@ extern "C" {
 /**
  * @brief IMU 俯仰角方向是否反向
  */
-#define IMU_PITCH_REVERSE               1
+#define IMU_PITCH_REVERSE               0
 
 /* ==================== 安全边界配置 ==================== */
 

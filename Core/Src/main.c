@@ -190,12 +190,12 @@ int main(void)
     /* USER CODE BEGIN 3 */
     /* 串口屏联调阶段先关闭周期状态上报，避免干扰命令解析 */
 
-    // static uint32_t screen_last_ms = 0U;
-    // if ((g_sys_ms - screen_last_ms) >= 100U)
-    // {
-    //   screen_last_ms = g_sys_ms;
-    //   ProtocolScreen_SendStatus();
-    // }
+     static uint32_t screen_last_ms = 0U;
+     if ((g_sys_ms - screen_last_ms) >= 100U)
+     {
+       screen_last_ms = g_sys_ms;
+       ProtocolScreen_SendStatus();
+     }
 
     /* USER CODE END 3 */
   }
