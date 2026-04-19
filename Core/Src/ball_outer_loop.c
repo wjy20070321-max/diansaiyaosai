@@ -1,18 +1,6 @@
 /** ****************************************************************************
  * @file    ball_outer_loop.c
- * @brief   小球位置外环控制模块源文件（路径进度加减速版）
- *
- * @note
- * 这版外环不再只是“位置误差越大，倾角越大”，
- * 而是按“当前在整段路径上的进度”来做速度规划：
- *
- * 1. 起点附近：目标速度较小，缓缓起步
- * 2. 路径前半段：目标速度逐步升高
- * 3. 路径后半段：目标速度逐步降低
- * 4. 接近目标：目标速度趋近于 0
- *
- * 如果当前球速度已经比“此时应有的目标速度”更大，
- * 控制器就会自动给反向倾角，提前减速。
+ * @brief   小球位置外环控制模块源文件（路径进度加减速版，按你这台机构重调）
  ******************************************************************************/
 
 #include "ball_outer_loop.h"
@@ -39,25 +27,177 @@ static uint8_t g_outer_inited = 0U;
 static uint8_t g_last_mode = 0xFFU;
 
 /* -------------------- 速度规划参数 -------------------- */
-/* 这些参数是这版逻辑的关键。 */
-#define PATH_RELOCK_TARGET_EPS_MM      (5.0f)   // 目标变化超过该值，认为进入新路径段
 
-/* 不同模式下的路径峰值速度（毫米/秒） */
-#define PATH_VPEAK_FAST_MMPS           (200.0f)
-#define PATH_VPEAK_BRAKE_MMPS          (100.0f)
-#define PATH_VPEAK_HOLD_MMPS            (50.0f)
+/**
+ * @brief 目标变化超过该值，认为进入新路径段
+ * @note  外环会把“当前球位置”当成新起点，重新规划一条到新目标的路径
+ *
+ * 调大：
+ *  - 不容易频繁重建路径
+ *  - 目标有轻微抖动时更稳
+ *  - 但切换目标会变迟钝
+ *
+ * 调小：
+ *  - 对目标变化更敏感
+ *  - 但如果目标点本身有抖动，路径会老重置，球会发飘
+ */
+#define PATH_RELOCK_TARGET_EPS_MM      (3.0f)
 
-/* 沿路径方向：速度误差 -> 倾角 的比例 */
-#define PATH_K_TAN_FAST                (0.022f)
-#define PATH_K_TAN_BRAKE               (0.032f)
-#define PATH_K_TAN_HOLD                (0.040f)
+/**
+ * @brief FAST 模式下的路径峰值速度（毫米/秒）
+ * @note  远距离快速推进时，希望球达到的目标最高速度
+ *
+ * 调大：
+ *  - 前半程加速更猛，整体更快
+ *  - 但更容易后半程刹不住、冲过头
+ *
+ * 调小：
+ *  - 前半程更稳
+ *  - 但整体会变肉
+ */
+#define PATH_VPEAK_FAST_MMPS           (110.0f)
 
-/* 终点附近的位置“收尾拉回” */
-#define PATH_K_END_POS                 (0.008f)
+/**
+ * @brief BRAKE 模式下的路径峰值速度（毫米/秒）
+ * @note  中距离减速阶段允许的目标速度上限
+ *
+ * 调大：
+ *  - 中段减速不那么明显
+ *  - 更容易“减速晚、停不住”
+ *
+ * 调小：
+ *  - 更早进入明显减速
+ *  - 但可能提前慢下来
+ */
+#define PATH_VPEAK_BRAKE_MMPS          (40.0f)
 
-/* 横向偏离路径的纠偏参数 */
-#define PATH_K_LAT_P                   (0.055f)
-#define PATH_K_LAT_D                   (0.0040f)
+/**
+ * @brief HOLD 模式下的路径峰值速度（毫米/秒）
+ * @note  接近终点时允许的目标速度上限
+ *
+ * 调大：
+ *  - 最后一段更愿意继续往前贴
+ *  - 但容易在目标附近晃
+ *
+ * 调小：
+ *  - 终点附近更稳
+ *  - 但容易“差一点到不了”
+ */
+#define PATH_VPEAK_HOLD_MMPS           (5.5f)
+
+/**
+ * @brief FAST 模式下，速度误差转换成倾角的比例
+ * @note  速度误差越大，板子沿路径方向给的倾角越大
+ *
+ * 调大：
+ *  - 前半程加速更猛
+ *  - 也更容易动作生硬
+ *
+ * 调小：
+ *  - 更平缓
+ *  - 但可能推不动
+ */
+#define PATH_K_TAN_FAST                (0.025f)
+
+/**
+ * @brief BRAKE 模式下，速度误差转换成倾角的比例
+ * @note  主要决定“减速阶段”板子反向刹车有多积极
+ *
+ * 调大：
+ *  - 后半程更愿意刹车
+ *  - 但太大容易突然反向、动作发硬
+ *
+ * 调小：
+ *  - 更柔和
+ *  - 但容易减速晚
+ */
+#define PATH_K_TAN_BRAKE               (0.037f)
+
+/**
+ * @brief HOLD 模式下，速度误差转换成倾角的比例
+ * @note  主要决定目标附近小范围修正时的敏感度
+ *
+ * 调大：
+ *  - 更愿意修正末段误差
+ *  - 但更容易在终点附近来回抖
+ *
+ * 调小：
+ *  - 更稳
+ *  - 但可能差一点不进去
+ */
+#define PATH_K_TAN_HOLD                (0.035f)
+
+/**
+ * @brief 终点附近的位置“收尾拉回”系数
+ * @note  即使目标速度已经降下来了，只要还没到终点，
+ *        仍然按“剩余距离 remain_mm”给一点朝终点的倾角
+ *
+ * 调大：
+ *  - 更容易把最后一点距离补过去
+ *  - 但太大了会在终点附近来回扯
+ *
+ * 调小：
+ *  - 更柔和
+ *  - 但容易提前停住、慢慢蹭过去
+ */
+#define PATH_K_END_POS                 (0.009f)
+
+/**
+ * @brief 终点增强窗口（毫米）
+ * @note  当离终点小于这个距离时，会把 PATH_K_END_POS 再增强
+ *
+ * 调大：
+ *  - 更早开始“最后冲一下”
+ *  - 但可能更早被拉得不自然
+ *
+ * 调小：
+ *  - 只有 very near target 才增强
+ *  - 更自然，但可能最后一小段不够有力
+ */
+#define PATH_END_BOOST_WINDOW_MM       (35.0f)
+
+/**
+ * @brief 终点增强倍率
+ * @note  进入终点增强窗口后，PATH_K_END_POS 会乘以这个系数
+ *
+ * 调大：
+ *  - 最后一小段更有力，更容易补进目标区
+ *  - 但太大容易过点后反复扯
+ *
+ * 调小：
+ *  - 更平滑
+ *  - 但可能最后差一点
+ */
+#define PATH_END_BOOST_SCALE           (2.0f)
+
+/**
+ * @brief 横向位置纠偏 P 系数
+ * @note  球偏离“起点到终点那条直线”多少，就按比例往回拉多少
+ *
+ * 调大：
+ *  - 更愿意走直线
+ *  - 但太大容易左右来回摆
+ *
+ * 调小：
+ *  - 横向更柔和
+ *  - 但路径可能变弯、偏着走
+ */
+#define PATH_K_LAT_P                   (0.045f)
+
+/**
+ * @brief 横向速度阻尼 D 系数
+ * @note  横向移动速度越大，阻尼越强，用来抑制左右摆动
+ *
+ * 调大：
+ *  - 横向更稳，更不容易振荡
+ *  - 但太大会显得迟钝
+ *
+ * 调小：
+ *  - 横向更灵活
+ *  - 但容易过终点后左右晃
+ */
+#define PATH_K_LAT_D                   (0.0060f)
+
 
 /* -------------------- 工具函数 -------------------- */
 static float GetTiltLimitDeg(uint8_t mode, float pos_err_mm)
@@ -101,29 +241,31 @@ static float GetTanGainByMode(uint8_t mode)
  * @note
  * - 前半程：逐步加速
  * - 后半程：逐步减速
+ * - 到终点时不直接掉到 0，而是保留一点点向前速度，避免提前停死
  * - 超过终点：目标速度给负值，帮助反向制动
  */
 static float BuildDesiredLineSpeed(float progress, float v_peak)
 {
     if (progress <= 0.0f)
     {
-        return 0.25f * v_peak;  // 起步不要给 0，留一点“起步推力”
+        return 0.20f * v_peak;
     }
 
     if (progress < 0.5f)
     {
-        /* 0~0.5：从 0.25*v_peak 线性升到 1.0*v_peak */
-        return v_peak * (0.25f + 1.50f * progress);
+        /* 0~0.5：从 0.2*v_peak 线性升到 1.0*v_peak */
+        return v_peak * (0.20f + 1.60f * progress);
     }
 
     if (progress <= 1.0f)
     {
-        /* 0.5~1.0：从 1.0*v_peak 线性降到 0 */
-        return v_peak * (2.0f - 2.0f * progress);
+        /* 0.5~1.0：从 1.0*v_peak 线性降到 0.15*v_peak */
+        float norm = (progress - 0.5f) / 0.5f;   /* 0~1 */
+        return v_peak * (1.00f - 0.85f * norm);
     }
 
     /* 已经过终点：给一个反向目标速度，帮助刹车回拉 */
-    return -0.30f * v_peak;
+    return -0.20f * v_peak;
 }
 
 /**
@@ -173,21 +315,22 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
 {
     float path_dx, path_dy;
     float path_len, inv_path_len;
-    float tx, ty;             // 路径切向单位向量
-    float nx, ny;             // 路径法向单位向量
+    float tx, ty;             /* 路径切向单位向量 */
+    float nx, ny;             /* 路径法向单位向量 */
 
-    float cx, cy;             // 当前点相对起点坐标
-    float s;                  // 当前在路径上的投影长度
-    float progress;           // 当前路径进度 0~1
+    float cx, cy;             /* 当前点相对起点坐标 */
+    float s;                  /* 当前在路径上的投影长度 */
+    float progress;           /* 当前路径进度 */
 
-    float v_line;             // 当前沿路径方向的速度
-    float v_lat;              // 当前横向速度
-    float v_peak;             // 当前模式下的峰值目标速度
-    float v_ref;              // 当前进度下的目标线速度
+    float v_line;             /* 当前沿路径方向的速度 */
+    float v_lat;              /* 当前横向速度 */
+    float v_peak;             /* 当前模式下的峰值目标速度 */
+    float v_ref;              /* 当前进度下的目标线速度 */
 
-    float remain_mm;          // 剩余路程
-    float tan_cmd_deg;        // 沿路径方向的倾角命令
-    float lat_cmd_deg;        // 横向纠偏倾角命令
+    float remain_mm;          /* 剩余路程 */
+    float end_gain;           /* 终点拉回增益 */
+    float tan_cmd_deg;        /* 沿路径方向的倾角命令 */
+    float lat_cmd_deg;        /* 横向纠偏倾角命令 */
 
     float theta_x_cmd_deg;
     float theta_y_cmd_deg;
@@ -269,22 +412,24 @@ void BallOuterLoop_Run(float x_ref, float y_ref,
     /* 当前模式对应的峰值速度 */
     v_peak = GetPeakSpeedByMode(mode);
 
-    /* 根据“路径进度”生成目标线速度 */
+    /* 根据路径进度生成目标线速度 */
     v_ref = BuildDesiredLineSpeed(progress, v_peak);
 
     /* 剩余路程（允许为负，表示已经冲过目标） */
     remain_mm = path_len - s;
 
+    /* 终点附近增强一点“拉回”能力，避免提前停住后慢慢蹭过去 */
+    end_gain = PATH_K_END_POS;
+    if (ABSF(remain_mm) <= PATH_END_BOOST_WINDOW_MM)
+    {
+        end_gain *= PATH_END_BOOST_SCALE;
+    }
+
     /* -------------------- 沿路径方向控制 -------------------- */
-    /* 核心逻辑：
-       - 前半程：v_ref 逐渐增大 => 倾角朝目标方向，推进加速
-       - 后半程：v_ref 逐渐减小 => 若当前速度仍大，就会自动给反向倾角减速
-       - 接近终点：再叠加一点位置收尾项，帮助平稳停住 */
     tan_cmd_deg = GetTanGainByMode(mode) * (v_ref - v_line)
-                + PATH_K_END_POS * remain_mm;
+                + end_gain * remain_mm;
 
     /* -------------------- 横向纠偏控制 -------------------- */
-    /* 横向偏离路径太多时，给一点法向纠偏倾角 */
     lat_cmd_deg = PID_RunErr(&g_pid_lateral, -(cx * nx + cy * ny), CONTROL_OUTER_DT_S)
                 - PATH_K_LAT_D * v_lat;
 

@@ -34,8 +34,8 @@ static uint8_t ScreenTask_IsRegionHoldAlias(uint8_t task_id)
 /* 这次新增：
    让外环根据“离目标点的距离”自动切换 FAST / BRAKE / HOLD，
    这样球快到目标点时会提前减速，而不是冲到点附近再猛刹。 */
-#define TARGET_BRAKE_DIST_MM   120.0f   // 大于此距离：快速推进
-#define TARGET_HOLD_DIST_MM     50.0f   // 小于此距离：进入稳住
+#define TARGET_BRAKE_DIST_MM   150.0f   // 大于此距离：快速推进
+#define TARGET_HOLD_DIST_MM     35.0f   // 小于此距离：进入稳住
 
 /* ======== 调试镜像变量：任务层 ======== */
 /* 这些变量方便你在调试窗口里直接观察任务状态 */

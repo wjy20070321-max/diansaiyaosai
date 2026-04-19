@@ -209,18 +209,18 @@ extern "C" {
  * @brief X 轴舵机中心偏移（度）
  * @note  如果安装机械中位不正，可通过这里补偿
  */
-#define SERVO_X_CENTER_OFFSET_DEG       0.0f
+#define SERVO_X_CENTER_OFFSET_DEG       -7.5f
 
 /**
  * @brief Y 轴舵机中心偏移（度）
  * @note  一般先保持 0，优先调 SERVO_Y_WORK_CENTER_DEG
  */
-#define SERVO_Y_CENTER_OFFSET_DEG       0.0f
+#define SERVO_Y_CENTER_OFFSET_DEG       7.0f
 
 /**
  * @brief X 轴舵机负向最大命令角（度）
  */
-#define SERVO_X_NEG_MAX_CMD_DEG         20.0f
+#define SERVO_X_NEG_MAX_CMD_DEG         15.0f
 
 /**
  * @brief X 轴舵机正向最大命令角（度）
@@ -230,7 +230,7 @@ extern "C" {
 /**
  * @brief Y 轴舵机负向最大命令角（度）
  */
-#define SERVO_Y_NEG_MAX_CMD_DEG         20.0f
+#define SERVO_Y_NEG_MAX_CMD_DEG         15.0f
 
 /**
  * @brief Y 轴舵机正向最大命令角（度）
@@ -267,19 +267,19 @@ extern "C" {
  * @brief 平台最大倾斜参考角（度）
  * @note  外环输出给内环的最大目标倾角
  */
-#define BOARD_MAX_TILT_REF_DEG          12.0f
+#define BOARD_MAX_TILT_REF_DEG          8.0f
 
 /**
  * @brief 保持状态下的平台参考倾角（度）
  * @note  用于目标点附近的小范围稳定控制
  */
-#define BOARD_HOLD_TILT_REF_DEG         6.0f
+#define BOARD_HOLD_TILT_REF_DEG         2.5f
 
 /**
  * @brief 刹车状态下的平台参考倾角（度）
  * @note  用于接近目标时减速
  */
-#define BOARD_BRAKE_TILT_REF_DEG        8.5f
+#define BOARD_BRAKE_TILT_REF_DEG        8.0f
 
 /* ==================== 硬件方向配置 ==================== */
 
@@ -297,12 +297,12 @@ extern "C" {
 /**
  * @brief IMU 横滚角方向是否反向
  */
-#define IMU_ROLL_REVERSE                0
+#define IMU_ROLL_REVERSE                1
 
 /**
  * @brief IMU 俯仰角方向是否反向
  */
-#define IMU_PITCH_REVERSE               0
+#define IMU_PITCH_REVERSE               1
 
 /* ==================== 安全边界配置 ==================== */
 
@@ -310,7 +310,7 @@ extern "C" {
  * @brief 小球靠近边缘的判定距离（毫米）
  * @note  小于该值时可触发保护或减速策略
  */
-#define BALL_NEAR_EDGE_MM               40.0f
+#define BALL_NEAR_EDGE_MM               10.0f
 
 /**
  * @brief 小球丢失时是否强制平台回中

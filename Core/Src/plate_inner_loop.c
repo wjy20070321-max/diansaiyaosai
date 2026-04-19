@@ -2,91 +2,144 @@
 #include "pid.h"
 
 /* -------------------- 内环 PID 控制器对象 -------------------- */
-/* 两个方向分别一个姿态 PID。
-   同样，D 项不用 pid.c 里的误差微分，而是直接用陀螺仪角速度做阻尼。 */
 static PID_t g_pid_theta_x;
 static PID_t g_pid_theta_y;
 
 /* -------------------- 内环 PID 参数 -------------------- */
-/* 调参建议：
-   1. 先调 kp，让平台能明显跟随目标倾角
-   2. 再调 kd_rate，减少发冲和抖动
-   3. 最后只加一点点 ki，修正轻微静差 */
-#define INNER_X_KP          (3.50f)//13.2
-#define INNER_X_KI          (0.030f)
-#define INNER_X_KD_RATE     (0.010f)
+/* -------------------- 内环 PID 参数 -------------------- */
 
-#define INNER_Y_KP          (3.50f)//6.2
-#define INNER_Y_KI          (0.030f)
-#define INNER_Y_KD_RATE     (0.010f)
+/**
+ * @brief X 轴姿态环比例系数
+ * @note  决定 X 轴对目标倾角误差的“反应力度”
+ *
+ * 调大：
+ *  - 跟随更快
+ *  - 但更容易生硬、抖动、顶行程
+ *
+ * 调小：
+ *  - 更平滑
+ *  - 但可能跟随偏慢、显得发软
+ */
+#define INNER_X_KP                  (3.8f)
+
+/**
+ * @brief X 轴姿态环积分系数
+ * @note  用来消除小静差，但也最容易引起拖尾和反向不干脆
+ *
+ * 调大：
+ *  - 更容易消掉“总差一点”的稳态误差
+ *  - 但容易积累旧误差，导致减速慢、反向慢、拖尾
+ *
+ * 调小：
+ *  - 更干脆、更稳
+ *  - 但可能存在一点小静差
+ *
+ * 建议：
+ *  - 调试阶段通常先设 0
+ *  - 系统稳了以后再加一点点
+ */
+#define INNER_X_KI                  (0.000f)
+
+/**
+ * @brief X 轴角速度阻尼系数
+ * @note  用陀螺仪角速度做 D 项，抑制发冲和抖动
+ *
+ * 调大：
+ *  - 刹得更住，动作更稳
+ *  - 但太大会显得发钝、发死
+ *
+ * 调小：
+ *  - 更灵敏
+ *  - 但更容易冲过头
+ */
+#define INNER_X_KD_RATE             (0.030f)
+
+/**
+ * @brief Y 轴姿态环比例系数
+ * @note  含义和 X 轴一样，只是作用在 Y 轴
+ */
+#define INNER_Y_KP                  (3.8f)
+
+/**
+ * @brief Y 轴姿态环积分系数
+ * @note  含义和 X 轴一样，只是作用在 Y 轴
+ */
+#define INNER_Y_KI                  (0.000f)
+
+/**
+ * @brief Y 轴角速度阻尼系数
+ * @note  含义和 X 轴一样，只是作用在 Y 轴
+ */
+#define INNER_Y_KD_RATE             (0.030f)
+/* -------------------- 平滑参数 -------------------- */
+/* 目标倾角每个 5ms 周期允许变化的最大值（度） */
+#define INNER_REF_MAX_DELTA_PER_STEP    (0.12f)
+
+/* 舵机输出每个 5ms 周期允许变化的最大值（度） */
+#define INNER_OUT_MAX_DELTA_PER_STEP    (0.35f)
 
 /* -------------------- 模块内部状态 -------------------- */
 static uint8_t g_inner_inited = 0U;
 
+/* 平滑后的内部状态 */
+static float g_theta_x_ref_filt = 0.0f;
+static float g_theta_y_ref_filt = 0.0f;
+static float g_last_ux = 0.0f;
+static float g_last_uy = 0.0f;
+
 /**
  * @brief 平台姿态内环控制器初始化函数
- *
- * @note 初始化两个方向的姿态 PID
  */
 void PlateInnerLoop_Init(void)
 {
-    /* 这里只用 PID_t 的 P / I 两部分，D 项由角速度阻尼单独完成 */
     PID_Init(&g_pid_theta_x,
              INNER_X_KP, INNER_X_KI, 0.0f,
-             -20.0f, 20.0f,
+             -SERVO_X_NEG_MAX_CMD_DEG, SERVO_X_POS_MAX_CMD_DEG,
              -200.0f, 200.0f);
 
     PID_Init(&g_pid_theta_y,
              INNER_Y_KP, INNER_Y_KI, 0.0f,
-             -20.0f, 20.0f,
+             -SERVO_Y_NEG_MAX_CMD_DEG, SERVO_Y_POS_MAX_CMD_DEG,
              -200.0f, 200.0f);
+
+    g_theta_x_ref_filt = 0.0f;
+    g_theta_y_ref_filt = 0.0f;
+    g_last_ux = 0.0f;
+    g_last_uy = 0.0f;
 
     g_inner_inited = 1U;
 }
 
 /**
  * @brief 平台姿态内环控制器重置函数
- *
- * @note 清空两个方向的积分状态
  */
 void PlateInnerLoop_Reset(void)
 {
     PID_Reset(&g_pid_theta_x);
     PID_Reset(&g_pid_theta_y);
+
+    g_theta_x_ref_filt = 0.0f;
+    g_theta_y_ref_filt = 0.0f;
+    g_last_ux = 0.0f;
+    g_last_uy = 0.0f;
 }
 
 /**
  * @brief 平台姿态内环主控制函数
- * @param theta_x_ref  X 轴目标倾角，单位：度
- * @param theta_y_ref  Y 轴目标倾角，单位：度
- * @param theta_x_meas X 轴实际测量倾角，单位：度
- * @param theta_y_meas Y 轴实际测量倾角，单位：度
- * @param gyro_x_meas  X 轴角速度测量值，单位：度/秒
- * @param gyro_y_meas  Y 轴角速度测量值，单位：度/秒
- * @param out          输出结构体指针，用于返回两个舵机命令角
- *
- * @note 控制思想：
- *       1. 姿态环用 PI 计算舵机命令基值
- *       2. 再减去角速度阻尼项 D
- *       3. 最终按舵机安全范围限幅
- *
- *       这种“PI + rate D”比直接对误差做微分更稳，也更容易调。
  */
 void PlateInnerLoop_Run(float theta_x_ref, float theta_y_ref,
                         float theta_x_meas, float theta_y_meas,
                         float gyro_x_meas, float gyro_y_meas,
                         PlateInnerOutput_t *out)
 {
-    float ux;   // X 方向舵机控制输出
-    float uy;   // Y 方向舵机控制输出
+    float ux;
+    float uy;
 
-    /* 输出指针保护 */
     if (out == NULL)
     {
         return;
     }
 
-    /* 若尚未初始化，则补初始化一次 */
     if (!g_inner_inited)
     {
         PlateInnerLoop_Init();
@@ -104,13 +157,34 @@ void PlateInnerLoop_Run(float theta_x_ref, float theta_y_ref,
     gyro_y_meas  = -gyro_y_meas;
 #endif
 
+    /* -------------------- 目标倾角斜坡限制 -------------------- */
+    g_theta_x_ref_filt = Limitf(theta_x_ref,
+                                g_theta_x_ref_filt - INNER_REF_MAX_DELTA_PER_STEP,
+                                g_theta_x_ref_filt + INNER_REF_MAX_DELTA_PER_STEP);
+
+    g_theta_y_ref_filt = Limitf(theta_y_ref,
+                                g_theta_y_ref_filt - INNER_REF_MAX_DELTA_PER_STEP,
+                                g_theta_y_ref_filt + INNER_REF_MAX_DELTA_PER_STEP);
+
     /* -------------------- X 轴：姿态 PI + 角速度阻尼 D -------------------- */
-    ux = PID_Run(&g_pid_theta_x, theta_x_ref, theta_x_meas, CONTROL_INNER_DT_S)
+    ux = PID_Run(&g_pid_theta_x, g_theta_x_ref_filt, theta_x_meas, CONTROL_INNER_DT_S)
        - INNER_X_KD_RATE * gyro_x_meas;
 
     /* -------------------- Y 轴：姿态 PI + 角速度阻尼 D -------------------- */
-    uy = PID_Run(&g_pid_theta_y, theta_y_ref, theta_y_meas, CONTROL_INNER_DT_S)
+    uy = PID_Run(&g_pid_theta_y, g_theta_y_ref_filt, theta_y_meas, CONTROL_INNER_DT_S)
        - INNER_Y_KD_RATE * gyro_y_meas;
+
+    /* -------------------- 输出斜坡限制 -------------------- */
+    ux = Limitf(ux,
+                g_last_ux - INNER_OUT_MAX_DELTA_PER_STEP,
+                g_last_ux + INNER_OUT_MAX_DELTA_PER_STEP);
+
+    uy = Limitf(uy,
+                g_last_uy - INNER_OUT_MAX_DELTA_PER_STEP,
+                g_last_uy + INNER_OUT_MAX_DELTA_PER_STEP);
+
+    g_last_ux = ux;
+    g_last_uy = uy;
 
     /* -------------------- 输出限幅 -------------------- */
     out->servo_x_cmd_deg = Limitf(ux, -SERVO_X_NEG_MAX_CMD_DEG, SERVO_X_POS_MAX_CMD_DEG);
