@@ -490,35 +490,48 @@ void TaskMgr_Update1ms(float ball_x, float ball_y, uint8_t ball_valid)
         return;
     }
 
-    /* -------------------- 区域目标判定 -------------------- */
-    if (s->is_region_target && s->region_id > 0U)
-    {
-        /* 如果这一目标要求保持 */
-        if (s->need_hold)
-        {
-            /* 只有当球稳定保持在区域内时，保持计时才会增加 */
-            if (Region_IsHeld(s->region_id, ball_x, ball_y))
-            {
-                g_task.hold_count_ms++;
+    /*-------------------- 区域目标判定 -------------------- */
+if (s->is_region_target && s->region_id > 0U)
+{
+    float dx;
+    float dy;
+    uint8_t in_task_radius = 0U;
 
-                /* 一旦保持时间达到要求，就认为该步骤完成 */
-                if (g_task.hold_count_ms >= s->hold_ms)
-                {
-                    reached = 1U;
-                }
-            }
-            else
+    /* 统一按“距目标区域中心 <= TASK_REACHED_RADIUS_MM”来判断是否到达黄圈 */
+    dx = ball_x - s->x_mm;
+    dy = ball_y - s->y_mm;
+
+    if ((dx * dx + dy * dy) <= SQRF(TASK_REACHED_RADIUS_MM))
+    {
+        in_task_radius = 1U;
+    }
+
+    /* 如果这一目标要求保持 */
+    if (s->need_hold)
+    {
+        /* 只要持续待在 2cm 半径黄圈里，就累计保持时间 */
+        if (in_task_radius)
+        {
+            g_task.hold_count_ms++;
+
+            /* 一旦保持时间达到要求，就认为该步骤完成 */
+            if (g_task.hold_count_ms >= s->hold_ms)
             {
-                /* 一旦中途离开稳定保持区域，保持计时清零重新计 */
-                g_task.hold_count_ms = 0U;
+                reached = 1U;
             }
         }
-        /* 如果这一目标不要求保持，只要进入区域就算到达 */
-        else if (Region_IsEntered(s->region_id, ball_x, ball_y))
+        else
         {
-            reached = 1U;
+            /* 一旦离开黄圈，保持计时清零重新计 */
+            g_task.hold_count_ms = 0U;
         }
     }
+    /* 如果这一目标不要求保持，只要进入 2cm 黄圈就算到达 */
+    else if (in_task_radius)
+    {
+        reached = 1U;
+    }
+}
     /* -------------------- 普通坐标点判定 -------------------- */
     else
     {

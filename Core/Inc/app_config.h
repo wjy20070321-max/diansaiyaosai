@@ -62,6 +62,12 @@ extern "C" {
  * @note  保持判定更严格，避免小球在边缘抖动时误判为稳定停留
  */
 #define REGION_HOLD_RADIUS_MM           (REGION_RADIUS_MM - BALL_RADIUS_MM)
+/**
+ * @brief 任务到达判定半径（毫米）
+ * @note  用于 ROUTE / ROUND / 直接去区域 等任务的“算到达/算稳定”判定。
+ *        这里按你现在要求，半径 2cm 黄圈内就算到了。
+ */
+#define TASK_REACHED_RADIUS_MM          20.0f
 
 /* ==================== 坐标系统配置 ==================== */
 
@@ -120,28 +126,28 @@ extern "C" {
 /**
  * @brief 基础题中心区域保持时间（毫秒）
  */
-#define CENTER_HOLD_MS                  5000U
+#define CENTER_HOLD_MS                  6000U
 
 /**
  * @brief 普通多点任务每点停留时间（毫秒）
  */
-#define ROUTE_HOLD_MS                   2000U
+#define ROUTE_HOLD_MS                   3000U
 
 /**
  * @brief 两点往返任务每次停留时间（毫秒）
  */
-#define ROUNDTRIP_HOLD_MS               3000U
+#define ROUNDTRIP_HOLD_MS               4000U
 
 /**
  * @brief “经过不停留”任务终点保持时间（毫秒）
  */
-#define PASS_END_HOLD_MS                2000U
+#define PASS_END_HOLD_MS                3000U
 
 /**
  * @brief 默认步骤超时时间（毫秒）
  * @note  某一步超过这个时间还没完成，就判定失败
  */
-#define DEFAULT_STEP_TIMEOUT_MS         12000U
+#define DEFAULT_STEP_TIMEOUT_MS         22000U
 
 /* ==================== 伺服电机配置 ==================== */
 

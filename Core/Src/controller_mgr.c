@@ -50,6 +50,13 @@ volatile float    dbg_outer_theta_x = 0.0f;
 volatile float    dbg_outer_theta_y = 0.0f;
 volatile uint32_t dbg_ball_age_ms = 0U;
 
+volatile uint8_t  dbg_task_current_step = 0U;
+volatile uint8_t  dbg_task_total_steps = 0U;
+volatile uint8_t  dbg_task_finished = 0U;
+volatile uint8_t  dbg_task_failed = 0U;
+volatile uint32_t dbg_task_hold_ms = 0U;
+volatile uint32_t dbg_task_total_time_ms = 0U;
+
 /* ======== 调试镜像变量：控制层 ======== */
 /* 这些变量方便你观察当前球状态和控制目标 */
 volatile float    dbg_ball_x_mm = 0.0f;     // 当前球 X 坐标
@@ -380,6 +387,12 @@ void ControllerMgr_UpdateInputs(void)
 
     dbg_task_id = ctx->task_id;
     dbg_task_running = ctx->running;
+	dbg_task_current_step = ctx->current_step;
+	dbg_task_total_steps = ctx->total_steps;
+	dbg_task_finished = ctx->finished;
+	dbg_task_failed = ctx->failed;
+	dbg_task_hold_ms = ctx->hold_count_ms;
+	dbg_task_total_time_ms = ctx->total_time_ms;
     dbg_route0 = ctx->route_region[0];
     dbg_route1 = ctx->route_region[1];
     dbg_route2 = ctx->route_region[2];

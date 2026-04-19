@@ -41,7 +41,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 对目标变化更敏感
  *  - 但如果目标点本身有抖动，路径会老重置，球会发飘
  */
-#define PATH_RELOCK_TARGET_EPS_MM      (3.6f)
+#define PATH_RELOCK_TARGET_EPS_MM      (3.0f)
 
 /**
  * @brief FAST 模式下的路径峰值速度（毫米/秒）
@@ -182,7 +182,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 横向更柔和
  *  - 但路径可能变弯、偏着走
  */
-#define PATH_K_LAT_P                   (0.045f)
+#define PATH_K_LAT_P                   (0.040f)
 
 /**
  * @brief 横向速度阻尼 D 系数
