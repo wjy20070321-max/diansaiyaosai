@@ -40,49 +40,126 @@ static uint8_t PushStep(RouteStep_t *steps, uint8_t max_steps, uint8_t *count,
 }
 
 /**
- * @brief 超过阈值固定拆成三段，没超过就不分
- * @note
- * - 中间两个虚拟点：CTRL_MODE_BRAKE + 保持 1s
- * - 最终真实目标点：保持原来的模式和保持逻辑
+ * @brief 长边中继规则
+ * @note 这些就是你现在想手工指定的“先到中继点，再到终点”的规则。
  */
-static uint8_t PushSegmentedMove(RouteStep_t *steps, uint8_t max_steps, uint8_t *count,
-                                 Point2f_t from, Point2f_t to,
-                                 uint8_t final_mode,
-                                 uint8_t final_need_hold, uint16_t final_hold_ms,
-                                 uint8_t final_is_region, uint8_t final_region_id)
+typedef struct
 {
-    float dx;
-    float dy;
-    float dist;
-    uint8_t segs;
-    uint8_t k;
+    uint8_t from_region;
+    uint8_t to_region;
+    float relay_x_mm;
+    float relay_y_mm;
+} RelayRule_t;
 
-    dx = to.x - from.x;
-    dy = to.y - from.y;
-    dist = sqrtf(dx * dx + dy * dy);
+/**
+ * @brief 查询某一对区域之间是否定义了中继点
+ * @param from_region 起始区域编号
+ * @param to_region   终止区域编号
+ * @param relay       输出中继点坐标
+ * @retval 1=有中继点，0=没有
+ */
+static uint8_t GetRelayPoint(uint8_t from_region, uint8_t to_region, Point2f_t *relay)
+{
+    uint32_t i;
 
-    /* 不超过阈值：不拆；超过阈值：固定拆成三段 */
-    if (dist > ROUTE_SPLIT_THRESHOLD_MM)
+    /* 你点名的这些长边，统一手工加中继点 */
+    static const RelayRule_t rules[] =
     {
-        segs = 3U;
+        /* 1 -> 6, 6 -> 1 */
+        {1U, 6U, 305.0f, 430.0f},
+        {6U, 1U, 305.0f, 430.0f},
+
+        /* 1 -> 8, 8 -> 1 */
+        {1U, 8U, 180.0f, 305.0f},
+        {8U, 1U, 180.0f, 305.0f},
+
+        /* 3 -> 8, 8 -> 3 */
+        {3U, 8U, 430.0f, 305.0f},
+        {8U, 3U, 430.0f, 305.0f},
+
+        /* 3 -> 4, 4 -> 3 */
+        {3U, 4U, 305.0f, 430.0f},
+        {4U, 3U, 305.0f, 430.0f},
+
+        /* 9 -> 4, 4 -> 9 */
+        {9U, 4U, 305.0f, 180.0f},
+        {4U, 9U, 305.0f, 180.0f},
+
+        /* 9 -> 2, 2 -> 9 */
+        {9U, 2U, 430.0f, 305.0f},
+        {2U, 9U, 430.0f, 305.0f},
+
+        /* 7 -> 2, 2 -> 7 */
+        {7U, 2U, 180.0f, 305.0f},
+        {2U, 7U, 180.0f, 305.0f},
+
+        /* 7 -> 6, 6 -> 7 */
+        {7U, 6U, 305.0f, 180.0f},
+        {6U, 7U, 305.0f, 180.0f},
+
+        /* 1 -> 9, 9 -> 1 */
+        {1U, 9U, 305.0f, 305.0f},
+        {9U, 1U, 305.0f, 305.0f},
+
+        /* 3 -> 7, 7 -> 3 */
+        {3U, 7U, 305.0f, 305.0f},
+        {7U, 3U, 305.0f, 305.0f}
+    };
+
+    if (relay == NULL)
+    {
+        return 0U;
     }
-    else
+
+    for (i = 0U; i < (sizeof(rules) / sizeof(rules[0])); i++)
     {
-        segs = 1U;
+        if ((rules[i].from_region == from_region) &&
+            (rules[i].to_region   == to_region))
+        {
+            relay->x = rules[i].relay_x_mm;
+            relay->y = rules[i].relay_y_mm;
+            return 1U;
+        }
     }
 
-    /* 插入中间虚拟点：BRAKE + 保持1秒 */
-    for (k = 1U; k < segs; k++)
-    {
-        float r = (float)k / (float)segs;
-        float mx = from.x + dx * r;
-        float my = from.y + dy * r;
+    return 0U;
+}
 
+/**
+ * @brief 在两个正式区域点之间，按需插入一个中继点
+ * @param steps            步骤数组
+ * @param max_steps        最大步骤数
+ * @param count            当前步骤计数指针
+ * @param from_region      起始区域编号
+ * @param to_region        终止区域编号
+ * @param final_x          最终点 X
+ * @param final_y          最终点 Y
+ * @param final_mode       最终点模式
+ * @param final_need_hold  最终点是否保持
+ * @param final_hold_ms    最终点保持时间
+ * @param final_is_region  最终点是否区域目标
+ * @param final_region_id  最终点区域号
+ * @param relay_need_hold  中继点是否保持
+ * @retval 1=成功，0=失败
+ */
+static uint8_t PushMoveWithOptionalRelay(RouteStep_t *steps, uint8_t max_steps, uint8_t *count,
+                                         uint8_t from_region, uint8_t to_region,
+                                         float final_x, float final_y,
+                                         uint8_t final_mode,
+                                         uint8_t final_need_hold, uint16_t final_hold_ms,
+                                         uint8_t final_is_region, uint8_t final_region_id,
+                                         uint8_t relay_need_hold)
+{
+    Point2f_t relay;
+
+    /* 如果这对区域定义了中继点，则先插入中继点 */
+    if (GetRelayPoint(from_region, to_region, &relay))
+    {
         if (!PushStep(steps, max_steps, count,
-                      mx, my,
+                      relay.x, relay.y,
                       CTRL_MODE_BRAKE,
-                      1U,
-                      VIRTUAL_POINT_HOLD_MS,
+                      relay_need_hold,
+                      relay_need_hold ? VIRTUAL_POINT_HOLD_MS : 0U,
                       DEFAULT_STEP_TIMEOUT_MS,
                       0U,
                       0U))
@@ -91,9 +168,9 @@ static uint8_t PushSegmentedMove(RouteStep_t *steps, uint8_t max_steps, uint8_t 
         }
     }
 
-    /* 最后插入真实目标点 */
+    /* 再插入真正目标点 */
     return PushStep(steps, max_steps, count,
-                    to.x, to.y,
+                    final_x, final_y,
                     final_mode,
                     final_need_hold,
                     final_hold_ms,
@@ -112,8 +189,7 @@ uint8_t RouteMgr_BuildRegionSequence(const uint8_t *route, uint8_t len,
     uint8_t i;
     uint8_t cnt = 0U;
     Point2f_t c;
-    Point2f_t prev_c;
-    uint8_t has_prev = 0U;
+    uint8_t prev_region = 0U;
 
     if (route == NULL || len == 0U)
     {
@@ -130,7 +206,7 @@ uint8_t RouteMgr_BuildRegionSequence(const uint8_t *route, uint8_t len,
         c = Region_GetCenter(route[i]);
 
         /* 第一个正式目标点：直接去 */
-        if (!has_prev)
+        if (prev_region == 0U)
         {
             if (!PushStep(steps, max_steps, &cnt,
                           c.x, c.y,
@@ -143,26 +219,25 @@ uint8_t RouteMgr_BuildRegionSequence(const uint8_t *route, uint8_t len,
             {
                 break;
             }
-
-            prev_c = c;
-            has_prev = 1U;
         }
         else
         {
-            /* 后续正式目标点：超过阈值固定拆三段，没超过不分 */
-            if (!PushSegmentedMove(steps, max_steps, &cnt,
-                                   prev_c, c,
-                                   CTRL_MODE_HOLD,
-                                   1U,
-                                   hold_ms,
-                                   1U,
-                                   route[i]))
+            /* 后续正式目标点：若命中长边规则，则先去中继点再去终点 */
+            if (!PushMoveWithOptionalRelay(steps, max_steps, &cnt,
+                                           prev_region, route[i],
+                                           c.x, c.y,
+                                           CTRL_MODE_HOLD,
+                                           1U,
+                                           hold_ms,
+                                           1U,
+                                           route[i],
+                                           1U))
             {
                 break;
             }
-
-            prev_c = c;
         }
+
+        prev_region = route[i];
     }
 
     return cnt;
@@ -178,8 +253,7 @@ uint8_t RouteMgr_BuildPassSequence(const uint8_t *route, uint8_t len,
     uint8_t i;
     uint8_t cnt = 0U;
     Point2f_t c;
-    Point2f_t prev_c;
-    uint8_t has_prev = 0U;
+    uint8_t prev_region = 0U;
 
     if (route == NULL || len == 0U)
     {
@@ -196,7 +270,7 @@ uint8_t RouteMgr_BuildPassSequence(const uint8_t *route, uint8_t len,
         c = Region_GetCenter(route[i]);
 
         /* 第一个正式目标点 */
-        if (!has_prev)
+        if (prev_region == 0U)
         {
             if (i < (len - 1U))
             {
@@ -226,41 +300,43 @@ uint8_t RouteMgr_BuildPassSequence(const uint8_t *route, uint8_t len,
                     break;
                 }
             }
-
-            prev_c = c;
-            has_prev = 1U;
         }
         else
         {
             if (i < (len - 1U))
             {
-                if (!PushSegmentedMove(steps, max_steps, &cnt,
-                                       prev_c, c,
-                                       CTRL_MODE_BRAKE,
-                                       0U,
-                                       0U,
-                                       1U,
-                                       route[i]))
+                /* PASS 模式中，中继点不保持，保持连续经过 */
+                if (!PushMoveWithOptionalRelay(steps, max_steps, &cnt,
+                                               prev_region, route[i],
+                                               c.x, c.y,
+                                               CTRL_MODE_BRAKE,
+                                               0U,
+                                               0U,
+                                               1U,
+                                               route[i],
+                                               0U))
                 {
                     break;
                 }
             }
             else
             {
-                if (!PushSegmentedMove(steps, max_steps, &cnt,
-                                       prev_c, c,
-                                       CTRL_MODE_HOLD,
-                                       1U,
-                                       final_hold_ms,
-                                       1U,
-                                       route[i]))
+                if (!PushMoveWithOptionalRelay(steps, max_steps, &cnt,
+                                               prev_region, route[i],
+                                               c.x, c.y,
+                                               CTRL_MODE_HOLD,
+                                               1U,
+                                               final_hold_ms,
+                                               1U,
+                                               route[i],
+                                               0U))
                 {
                     break;
                 }
             }
-
-            prev_c = c;
         }
+
+        prev_region = route[i];
     }
 
     return cnt;
@@ -277,8 +353,7 @@ uint8_t RouteMgr_BuildRoundTrip(uint8_t a, uint8_t b, uint8_t cycles,
     uint8_t cnt = 0U;
     Point2f_t ca;
     Point2f_t cb;
-    Point2f_t prev_c;
-    uint8_t has_prev = 0U;
+    uint8_t prev_region = 0U;
 
     if (a < 1U || a > 9U || b < 1U || b > 9U || cycles == 0U)
     {
@@ -291,7 +366,7 @@ uint8_t RouteMgr_BuildRoundTrip(uint8_t a, uint8_t b, uint8_t cycles,
     for (i = 0U; i < cycles; i++)
     {
         /* 去 A */
-        if (!has_prev)
+        if (prev_region == 0U)
         {
             if (!PushStep(steps, max_steps, &cnt,
                           ca.x, ca.y,
@@ -304,39 +379,40 @@ uint8_t RouteMgr_BuildRoundTrip(uint8_t a, uint8_t b, uint8_t cycles,
             {
                 break;
             }
-
-            prev_c = ca;
-            has_prev = 1U;
         }
         else
         {
-            if (!PushSegmentedMove(steps, max_steps, &cnt,
-                                   prev_c, ca,
-                                   CTRL_MODE_HOLD,
-                                   1U,
-                                   hold_ms,
-                                   1U,
-                                   a))
+            if (!PushMoveWithOptionalRelay(steps, max_steps, &cnt,
+                                           prev_region, a,
+                                           ca.x, ca.y,
+                                           CTRL_MODE_HOLD,
+                                           1U,
+                                           hold_ms,
+                                           1U,
+                                           a,
+                                           1U))
             {
                 break;
             }
-
-            prev_c = ca;
         }
 
+        prev_region = a;
+
         /* 去 B */
-        if (!PushSegmentedMove(steps, max_steps, &cnt,
-                               prev_c, cb,
-                               CTRL_MODE_HOLD,
-                               1U,
-                               hold_ms,
-                               1U,
-                               b))
+        if (!PushMoveWithOptionalRelay(steps, max_steps, &cnt,
+                                       prev_region, b,
+                                       cb.x, cb.y,
+                                       CTRL_MODE_HOLD,
+                                       1U,
+                                       hold_ms,
+                                       1U,
+                                       b,
+                                       1U))
         {
             break;
         }
 
-        prev_c = cb;
+        prev_region = b;
     }
 
     return cnt;

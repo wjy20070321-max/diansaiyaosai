@@ -85,22 +85,10 @@ extern "C" {
 /* ==================== 长距离任务拆段配置 ==================== */
 
 /**
- * @brief 长距离拆段阈值（毫米）
- * @note  超过该阈值的正式目标点之间，固定拆成 3 段；
- *        不超过就完全不拆，避免把原本好的相邻点也拆坏。
- */
-#define ROUTE_SPLIT_THRESHOLD_MM        400.0f
-
-/**
- * @brief 兼容旧宏名
- */
-#define ROUTE_MAX_LEG_MM                ROUTE_SPLIT_THRESHOLD_MM
-
-/**
  * @brief 虚拟过渡点保持时间（毫秒）
  * @note  长距离拆段后，中间虚拟点使用 BRAKE 模式并保持 1 秒。
  */
-#define VIRTUAL_POINT_HOLD_MS           3000U
+#define VIRTUAL_POINT_HOLD_MS           100U
 
 /* ==================== 控制周期配置 ==================== */
 

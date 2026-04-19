@@ -427,15 +427,12 @@ void ControllerMgr_Run10ms(void)
     dbg_run10ms_exec_cnt++;
     dbg_ball_age_ms = g_sys_ms - g_sys.ball.tick_ms;
 
-    /* 先从任务管理器读取当前目标点和模式 */
-    TaskMgr_GetTarget(&g_sys.ref.target_x_mm, &g_sys.ref.target_y_mm, &g_sys.ref.mode);
-
-    /* 如果当前没有任务在运行，则默认目标回到平台中心 */
-    if (!TaskMgr_IsRunning())
+    /* 只在任务运行时更新目标。
+       这样任务完成 / 失败 / Stop 以后，就保持最后那个目标点不变，
+       不再自动回板中心。 */
+    if (TaskMgr_IsRunning())
     {
-        g_sys.ref.target_x_mm = BOARD_CENTER_X_MM;
-        g_sys.ref.target_y_mm = BOARD_CENTER_Y_MM;
-        g_sys.ref.mode = CTRL_MODE_HOLD;
+        TaskMgr_GetTarget(&g_sys.ref.target_x_mm, &g_sys.ref.target_y_mm, &g_sys.ref.mode);
     }
 
     /* 更新调试镜像 */
