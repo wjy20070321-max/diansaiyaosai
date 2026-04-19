@@ -209,13 +209,13 @@ extern "C" {
  * @brief X 轴舵机中心偏移（度）
  * @note  如果安装机械中位不正，可通过这里补偿
  */
-#define SERVO_X_CENTER_OFFSET_DEG       -7.5f
+#define SERVO_X_CENTER_OFFSET_DEG       -2.5f
 
 /**
  * @brief Y 轴舵机中心偏移（度）
  * @note  一般先保持 0，优先调 SERVO_Y_WORK_CENTER_DEG
  */
-#define SERVO_Y_CENTER_OFFSET_DEG       7.0f
+#define SERVO_Y_CENTER_OFFSET_DEG       2.3f
 
 /**
  * @brief X 轴舵机负向最大命令角（度）
@@ -302,7 +302,7 @@ extern "C" {
 /**
  * @brief IMU 俯仰角方向是否反向
  */
-#define IMU_PITCH_REVERSE               1
+#define IMU_PITCH_REVERSE               0
 
 /* ==================== 安全边界配置 ==================== */
 

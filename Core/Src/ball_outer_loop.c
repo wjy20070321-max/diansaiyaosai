@@ -41,7 +41,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 对目标变化更敏感
  *  - 但如果目标点本身有抖动，路径会老重置，球会发飘
  */
-#define PATH_RELOCK_TARGET_EPS_MM      (3.0f)
+#define PATH_RELOCK_TARGET_EPS_MM      (3.6f)
 
 /**
  * @brief FAST 模式下的路径峰值速度（毫米/秒）
@@ -55,7 +55,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 前半程更稳
  *  - 但整体会变肉
  */
-#define PATH_VPEAK_FAST_MMPS           (110.0f)
+#define PATH_VPEAK_FAST_MMPS           (100.0f)
 
 /**
  * @brief BRAKE 模式下的路径峰值速度（毫米/秒）
@@ -97,7 +97,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 更平缓
  *  - 但可能推不动
  */
-#define PATH_K_TAN_FAST                (0.025f)
+#define PATH_K_TAN_FAST                (0.020f)
 
 /**
  * @brief BRAKE 模式下，速度误差转换成倾角的比例
@@ -111,7 +111,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 更柔和
  *  - 但容易减速晚
  */
-#define PATH_K_TAN_BRAKE               (0.037f)
+#define PATH_K_TAN_BRAKE               (0.047f)
 
 /**
  * @brief HOLD 模式下，速度误差转换成倾角的比例
@@ -140,7 +140,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 更柔和
  *  - 但容易提前停住、慢慢蹭过去
  */
-#define PATH_K_END_POS                 (0.009f)
+#define PATH_K_END_POS                 (0.010f)
 
 /**
  * @brief 终点增强窗口（毫米）
@@ -168,7 +168,7 @@ static uint8_t g_last_mode = 0xFFU;
  *  - 更平滑
  *  - 但可能最后差一点
  */
-#define PATH_END_BOOST_SCALE           (2.0f)
+#define PATH_END_BOOST_SCALE           (2.5f)
 
 /**
  * @brief 横向位置纠偏 P 系数
