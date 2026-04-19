@@ -124,7 +124,7 @@ void TaskMgr_LoadTask(uint8_t task_id)
  */
 void TaskMgr_SetDirectPoint(float x_mm, float y_mm)
 {
-    TaskMgr_ResetRuntime();           // 清空旧任务运行状态
+    TaskMgr_ResetRuntime();              // 清空旧任务运行状态
     g_task.task_id = TASK_ID_GOTO_POINT; // 标记当前任务类型为“去指定点”
 
     /* 将目标点限制在板子有效范围 [0, BOARD_SIZE_MM] 内 */
@@ -141,7 +141,7 @@ void TaskMgr_SetDirectPoint(float x_mm, float y_mm)
  */
 void TaskMgr_SetDirectRegion(uint8_t region_id)
 {
-    TaskMgr_ResetRuntime();              // 清空旧任务运行状态
+    TaskMgr_ResetRuntime();               // 清空旧任务运行状态
     g_task.task_id = TASK_ID_GOTO_REGION; // 标记当前任务类型为“去指定区域”
     g_task.current_region_cmd = region_id; // 保存目标区域编号
 }
@@ -428,21 +428,10 @@ void TaskMgr_GetTarget(float *x_mm, float *y_mm, uint8_t *mode)
  * @param ball_valid 当前球坐标是否有效：1=有效，0=无效
  *
  * @note 这是任务状态机的核心推进函数。
- *
- *       它每 1ms 会做这些事情：
- *       1. 如果任务没在跑，直接返回
- *       2. 对持续目标模式，只累计总时间，不走步骤状态机
- *       3. 对步骤型任务：
- *          - 累计时间
- *          - 判断是否超时
- *          - 判断球是否到达当前目标
- *          - 判断是否已满足保持时间
- *          - 决定是否切换到下一步
- *          - 如果全部完成，则标记任务 finished
  */
 void TaskMgr_Update1ms(float ball_x, float ball_y, uint8_t ball_valid)
 {
-    RouteStep_t *s;      // 当前步骤指针
+    RouteStep_t *s;       // 当前步骤指针
     uint8_t reached = 0U; // 当前步骤是否已达成
 
     /* 如果任务没在运行，直接返回 */
@@ -490,56 +479,78 @@ void TaskMgr_Update1ms(float ball_x, float ball_y, uint8_t ball_valid)
         return;
     }
 
-    /*-------------------- 区域目标判定 -------------------- */
-if (s->is_region_target && s->region_id > 0U)
-{
-    float dx;
-    float dy;
-    uint8_t in_task_radius = 0U;
-
-    /* 统一按“距目标区域中心 <= TASK_REACHED_RADIUS_MM”来判断是否到达黄圈 */
-    dx = ball_x - s->x_mm;
-    dy = ball_y - s->y_mm;
-
-    if ((dx * dx + dy * dy) <= SQRF(TASK_REACHED_RADIUS_MM))
+    /* -------------------- 区域目标判定 -------------------- */
+    if (s->is_region_target && s->region_id > 0U)
     {
-        in_task_radius = 1U;
-    }
+        float dx;
+        float dy;
+        uint8_t in_task_radius = 0U;
 
-    /* 如果这一目标要求保持 */
-    if (s->need_hold)
-    {
-        /* 只要持续待在 2cm 半径黄圈里，就累计保持时间 */
-        if (in_task_radius)
+        /* 统一按“距目标区域中心 <= TASK_REACHED_RADIUS_MM”来判断是否到达黄圈 */
+        dx = ball_x - s->x_mm;
+        dy = ball_y - s->y_mm;
+
+        if ((dx * dx + dy * dy) <= SQRF(TASK_REACHED_RADIUS_MM))
         {
-            g_task.hold_count_ms++;
+            in_task_radius = 1U;
+        }
 
-            /* 一旦保持时间达到要求，就认为该步骤完成 */
-            if (g_task.hold_count_ms >= s->hold_ms)
+        /* 如果这一目标要求保持 */
+        if (s->need_hold)
+        {
+            /* 只要持续待在 2cm 半径黄圈里，就累计保持时间 */
+            if (in_task_radius)
             {
-                reached = 1U;
+                g_task.hold_count_ms++;
+
+                /* 一旦保持时间达到要求，就认为该步骤完成 */
+                if (g_task.hold_count_ms >= s->hold_ms)
+                {
+                    reached = 1U;
+                }
+            }
+            else
+            {
+                /* 一旦离开黄圈，保持计时清零重新计 */
+                g_task.hold_count_ms = 0U;
             }
         }
-        else
+        /* 如果这一目标不要求保持，只要进入 2cm 黄圈就算到达 */
+        else if (in_task_radius)
         {
-            /* 一旦离开黄圈，保持计时清零重新计 */
-            g_task.hold_count_ms = 0U;
+            reached = 1U;
         }
     }
-    /* 如果这一目标不要求保持，只要进入 2cm 黄圈就算到达 */
-    else if (in_task_radius)
-    {
-        reached = 1U;
-    }
-}
     /* -------------------- 普通坐标点判定 -------------------- */
     else
     {
         float dx = ball_x - s->x_mm;
         float dy = ball_y - s->y_mm;
+        uint8_t in_point_radius = 0U;
 
-        /* 如果距离目标点的平方小于等于 20mm 半径阈值，则算到达 */
         if ((dx * dx + dy * dy) <= SQRF(20.0f))
+        {
+            in_point_radius = 1U;
+        }
+
+        /* 普通点也支持保持计时 */
+        if (s->need_hold)
+        {
+            if (in_point_radius)
+            {
+                g_task.hold_count_ms++;
+
+                if (g_task.hold_count_ms >= s->hold_ms)
+                {
+                    reached = 1U;
+                }
+            }
+            else
+            {
+                g_task.hold_count_ms = 0U;
+            }
+        }
+        else if (in_point_radius)
         {
             reached = 1U;
         }
@@ -548,9 +559,9 @@ if (s->is_region_target && s->region_id > 0U)
     /* -------------------- 如果当前步骤已完成 -------------------- */
     if (reached)
     {
-        g_task.current_step++;    // 进入下一步
-        g_task.step_time_ms = 0U; // 当前步骤计时清零
-        g_task.hold_count_ms = 0U;// 当前保持计时清零
+        g_task.current_step++;     // 进入下一步
+        g_task.step_time_ms = 0U;  // 当前步骤计时清零
+        g_task.hold_count_ms = 0U; // 当前保持计时清零
 
         /* 如果已经没有后续步骤了，则整个任务完成 */
         if (g_task.current_step >= g_task.total_steps)
